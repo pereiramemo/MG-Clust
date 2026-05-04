@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-mg-clust module 3: Concatenation, filtering, MMseqs2 DB creation, ORF clustering,
-and abundance table generation.
+mg-clust module 3: Concatenation, filtering, MMseqs2 DB creation, and ORF clustering.
 
 Assumes execution inside the conda environment "mg-clust-module-3" (or equivalent)
 where dependencies are available on PATH.
@@ -9,11 +8,18 @@ where dependencies are available on PATH.
 - Concatenates ORF protein sequences from all samples, prefixing each header with the sample name
 - Filters ORFs by minimum length using bbduk
 - Creates an MMseqs2 sequence database from the filtered ORFs
-- Concatenates per-sample mean coverage tables, prefixing each ORF ID with the sample name
-- Concatenates per-sample reads coverage tables, prefixing each ORF ID with the sample name
 - Clusters filtered ORFs using MMseqs2 at a given sequence identity threshold
-- Maps mean coverage and reads coverage tables to cluster IDs
-- Collapses per-ORF abundance to per-cluster abundance summed across samples
+- Exports clustering results as a TSV table
+"""
+
+"""
+Notes:
+The script has checks that allow resuming the workflow orf files and database without 
+re-running if these already exists. However, when using nextflow, the module will be 
+re-run only if any of the input files change, and in a new independent directory, so 
+this checks are not strictly necessary. It can still be useful if the script is run 
+outside of nextflow or if the concatenated file is accidentally deleted.
+ 
 """
 
 ###############################################################################
@@ -24,7 +30,6 @@ import argparse
 import sys, os
 import subprocess
 import shutil
-import pandas as pd
 sys.path.insert(0, os.path.dirname(__file__))
 from utils import run, check_tools
 
@@ -42,7 +47,7 @@ mmseqs = "mmseqs"
 def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
-        description=f"{os.path.basename(__file__)}: Concatenation, filtering, ORF clustering, and OPU tables formatting", 
+        description=f"{os.path.basename(__file__)}: Concatenation, filtering, MMseqs2 DB creation, and ORF clustering", 
         add_help=False
     )
 
@@ -50,12 +55,6 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--orf_files", dest="orf_files", required=True, nargs="+",
         help="list of per-sample ORF fasta files (*_orfs.faa)")
-
-    parser.add_argument("--meancov_files", dest="meancov_files", required=True, nargs="+",
-        help="list of per-sample mean coverage tables (*_orfs_meancov.tsv)")
-
-    parser.add_argument("--readscov_files", dest="readscov_files", required=True, nargs="+",
-        help="list of per-sample reads coverage tables (*_orfs_readscov.tsv)")
 
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads used (default: 4)")
@@ -116,103 +115,87 @@ def main() -> None:
 
     concat_orfs = os.path.join(args.output_dir, "orfs.faa")
 
-    open(concat_orfs, "w").close()
+    if not os.path.isfile(concat_orfs):
+        open(concat_orfs, "w").close()
+        for orf_file in args.orf_files:
+            try:
+                with open(orf_file, "rb") as in_fh, open(concat_orfs, "ab") as out_fh:
+                    shutil.copyfileobj(in_fh, out_fh)
+            except Exception as exc:
+                print(f"concatenating {orf_file} failed: {exc}", file=sys.stderr)
+                sys.exit(1)
 
-    for orf_file in args.orf_files:
+    ###########################################################################
+    # 3.4. Filter ORFs by length
+    ###########################################################################
+
+    concat_orfs_filt = os.path.join(args.output_dir, f"orfs_filt-minlen{args.min_orf_length}aa.faa")
+    run_filter = not os.path.isfile(concat_orfs_filt)
+
+    if run_filter:
         try:
-            with open(orf_file, "rb") as in_fh, open(concat_orfs, "ab") as out_fh:
-                shutil.copyfileobj(in_fh, out_fh)
-        except Exception as exc:
-            print(f"concatenating {orf_file} failed: {exc}", file=sys.stderr)
+            run(
+                [
+                    bbduk,
+                    f"in={concat_orfs}",
+                    f"out={concat_orfs_filt}",
+                    "overwrite=t",
+                    f"threads={args.nslots}",
+                    f"minlength={args.min_orf_length}",
+                    "amino=t"
+                ]
+            )
+        except subprocess.CalledProcessError:
+            print("bbduk failed", file=sys.stderr)
             sys.exit(1)
 
     ###########################################################################
-    # 3.4. Concat and format mean coverage table
+    # 3.5. Create mmseqs database
     ###########################################################################
 
-    meancov_table = os.path.join(args.output_dir, "orfs_meancov.tsv")
-
-    open(meancov_table, "w").close()
-
-    try:
-        for meancov_file in args.meancov_files:
-            with open(meancov_file, "rb") as in_fh, open(meancov_table, "ab") as out_fh:
-                shutil.copyfileobj(in_fh, out_fh)
-    except Exception as exc:
-        print(f"concat and format mean coverage table failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    ###########################################################################
-    # 3.5. Concat and format reads coverage table
-    ###########################################################################
-
-    readscov_table = os.path.join(args.output_dir, "orfs_readscov.tsv")
-
-    open(readscov_table, "w").close()
-
-    try:
-        for readscov_file in args.readscov_files:
-            with open(readscov_file, "rb") as in_fh, open(readscov_table, "ab") as out_fh:
-                shutil.copyfileobj(in_fh, out_fh)
-    except Exception as exc:
-        print(f"concat and format reads coverage table failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    ###########################################################################
-    # 3.6. Filter ORFs by length
-    ###########################################################################
-
-    concat_orfs_filt = concat_orfs.replace(".faa", "_filt.faa")
-
-    try:
-        run(
-            [
-                bbduk,
-                f"in={concat_orfs}",
-                f"out={concat_orfs_filt}",
-                "overwrite=t",
-                f"threads={args.nslots}",
-                f"minlength={args.min_orf_length}",
-                "amino=t"
-            ]
-        )
-    except subprocess.CalledProcessError:
-        print("bbduk failed", file=sys.stderr)
-        sys.exit(1)
-
-    ###########################################################################
-    # 3.7. Create mmseqs database
-    ###########################################################################
-    
-    orfs_filt_db_dir = os.path.join(args.output_dir, "orfs_filt_db",)
-    try:
-        os.makedirs(orfs_filt_db_dir, exist_ok=False)
-    except Exception:
-        print(f"mkdir {orfs_filt_db_dir} failed", file=sys.stderr)
-        sys.exit(1)
-    
+    orfs_filt_db_dir = os.path.join(args.output_dir, f"orfs_filt_db-minlen{args.min_orf_length}aa")
     orfs_filt_db = os.path.join(orfs_filt_db_dir, "orfs_filt_db")
 
-    try:
-        run(
-            [
-                mmseqs,
-                "createdb",
-                concat_orfs_filt,
-                orfs_filt_db,
-                "--dbtype", "1"
-            ]
-        )
-    except subprocess.CalledProcessError:
-        print("mmseqs createdb failed", file=sys.stderr)
-        sys.exit(1)
+    # .dbtype file is created by mmseqs createdb; if it doesn't exist, the DB needs to be created
+    create_db = not os.path.isfile(orfs_filt_db + ".dbtype")
+
+    # If filtering was rerun, the DB must be rebuilt to match the new filtered FASTA.
+    if run_filter:
+        create_db = True
+        if os.path.isdir(orfs_filt_db_dir):
+            try:
+                shutil.rmtree(orfs_filt_db_dir)
+            except Exception:
+                print(f"rm -r {orfs_filt_db_dir} failed", file=sys.stderr)
+                sys.exit(1)
+
+    if create_db:
+        try:
+            os.makedirs(orfs_filt_db_dir, exist_ok=True)
+        except Exception:
+            print(f"mkdir {orfs_filt_db_dir} failed", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            run(
+                [
+                    mmseqs,
+                    "createdb",
+                    concat_orfs_filt,
+                    orfs_filt_db,
+                    "--dbtype", "1"
+                ]
+            )
+        except subprocess.CalledProcessError:
+            print("mmseqs createdb failed", file=sys.stderr)
+            sys.exit(1)
 
     ###########################################################################
-    # 3.8. Run ORF clustering
+    # 3.6. Run ORF clustering
     ###########################################################################
 
-    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".") + "perc"
-    clust_dir = os.path.join(args.output_dir, f"clust_orfs_id{clust_thres_str}")
+    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
+    clust_dir = os.path.join(args.output_dir, f"orfs_clust-id{clust_thres_str}perc-minlen{args.min_orf_length}aa")
 
     try:
         os.makedirs(clust_dir, exist_ok=False)
@@ -221,7 +204,7 @@ def main() -> None:
         sys.exit(1)
 
     tmp_dir = os.path.join(clust_dir, "tmp")
-    clust_db = os.path.join(clust_dir, f"orfs_clust_id{clust_thres_str}")
+    clust_db = os.path.join(clust_dir, f"orfs_clust-id{clust_thres_str}perc-minlen{args.min_orf_length}aa")
 
     try:
         run(
@@ -249,10 +232,10 @@ def main() -> None:
             sys.exit(1)
 
     ###########################################################################
-    # 3.9. Convert clustering results to TSV
+    # 3.7. Convert clustering results to TSV
     ###########################################################################
 
-    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust_id{clust_thres_str}.tsv")
+    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-id{clust_thres_str}perc-minlen{args.min_orf_length}aa.tsv")
 
     try:
         run(
@@ -269,109 +252,6 @@ def main() -> None:
         print("mmseqs createtsv failed", file=sys.stderr)
         sys.exit(1)
 
-    ###########################################################################
-    # 3.10. Map mean coverage to clusters
-    ###########################################################################
-
-    clust2meancov_table = os.path.join(clust_dir, f"orfs_clust_id{clust_thres_str}2meancov.tsv")
-    not_found_list_path = os.path.join(clust_dir, f"orfs_clust_id{clust_thres_str}_short_orfs.list")
-
-    try:
-        meancov_table_df = pd.read_csv(meancov_table, sep="\t", header=None,
-                             names=["_c1", "_c2", "_c3", "_c4", "orf_id", "abund"],
-                             usecols=[4, 5])
-
-        # sample_name is embedded in orf_id as sample|orf
-        meancov_table_df["sample_name"] = meancov_table_df["orf_id"].astype(str).str.split("|", n=1).str[0]
-
-        mmseqs_clust_table_df = pd.read_csv(mmseqs_clust_table, sep="\t", header=None,
-                                            names=["opu_id", "orf_id"])
-
-        # Left join; ORFs filtered by length will have NaN clust_id
-        merged_df = meancov_table_df.merge(
-            mmseqs_clust_table_df,
-            on="orf_id",
-            how="left"
-        )
-
-        clust2meancov_table_df = merged_df[merged_df["opu_id"].notna()]
-        notfound_df = merged_df[merged_df["opu_id"].isna()]
-
-        clust2meancov_table_df[["sample_name", "opu_id", "orf_id", "abund"]].to_csv(
-            clust2meancov_table, sep="\t", header=False, index=False)
-
-        notfound_df["orf_id"].to_csv(not_found_list_path, header=False, index=False)
-
-    except Exception as exc:
-        print(f"Map cluster to mean coverage failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    ###########################################################################
-    # 3.11. Map reads coverage to clusters
-    ###########################################################################
-
-    clust2readscov_table = os.path.join(clust_dir, f"clust_orfs_id{clust_thres_str}2readscov.tsv")
-
-    try:
-        readscov_table_df = pd.read_csv(readscov_table, sep="\t", header=None,
-                             names=["_c1", "_c2", "_c3", "_c4", "orf_id", "abund"],
-                             usecols=[4, 5])
-
-        # sample_name is embedded in orf_id as sample|orf
-        readscov_table_df["sample_name"] = readscov_table_df["orf_id"].astype(str).str.split("|", n=1).str[0]
-
-        # Left join; ORFs filtered by length will have NaN opu_id
-        merged_df = readscov_table_df.merge(
-            mmseqs_clust_table_df,
-            on="orf_id",
-            how="left"
-        )
-
-        clust2readscov_table_df = merged_df[merged_df["opu_id"].notna()]
-
-        clust2readscov_table_df[["sample_name", "opu_id", "orf_id", "abund"]].to_csv(
-            clust2readscov_table, sep="\t", header=False, index=False)
-
-    except Exception as exc:
-        print(f"Map cluster to reads coverage failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    ###########################################################################
-    # 3.12. Create workable: Collapsed mean coverage table
-    ###########################################################################
-
-    clust2meancov_table_workable = os.path.join(
-        args.output_dir, f"orfs_clust_id{clust_thres_str}_meancov_workable.tsv")
-
-    try:
-        clust2meancov_table_workable_df = clust2meancov_table_df.groupby(
-            ["sample_name", "opu_id"], as_index=False)["abund"].sum()
-        clust2meancov_table_workable_df.to_csv(
-            clust2meancov_table_workable, sep="\t", header=False, index=False)
-
-    except Exception as exc:
-        print(f"Collapse mean coverage failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    ###########################################################################
-    # 3.13. Create workable: Collapsed reads coverage table
-    ###########################################################################
-
-    clust2readscov_table_workable = os.path.join(
-        args.output_dir, f"orfs_clust_id{clust_thres_str}_readscov_workable.tsv")
-
-    try:
-        clust2readscov_table_workable_df = clust2readscov_table_df.groupby(
-            ["sample_name", "opu_id"], as_index=False)["abund"].sum()
-        clust2readscov_table_workable_df.to_csv(
-            clust2readscov_table_workable, sep="\t", header=False, index=False)
-
-    except Exception as exc:
-        print(f"Collapse reads coverage failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"{os.path.basename(__file__)} exited successfully")
-    sys.exit(0)
 
 ###########################################################################
 # 4. Run the main function

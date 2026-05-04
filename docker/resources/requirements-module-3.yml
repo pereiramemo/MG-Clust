@@ -7,4 +7,3 @@ dependencies:
   - python>=3.8
   - bbtools=37.62
   - mmseqs2=18.8cc5c
-  - pandas=3.0.1
