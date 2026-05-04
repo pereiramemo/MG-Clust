@@ -7,15 +7,14 @@
 process MODULE6 {
 
     container "ghcr.io/epereira/mg-clust/${task.process.toLowerCase().replaceFirst('module', 'module-')}:latest"
-    publishDir "${params.output_dir}/${task.process.toLowerCase().replaceFirst('module', 'module-')}/",
+    publishDir "${params.output_dir}/",
            mode: "copy",
            enabled: params.full_output || params.stop_at_module == 6            
 
     input:
-    path(tax_files)
-    path(fun_files)
-    path(meancov_table)
-    path(readscov_table)
+    path(meancov_files)
+    path(readscov_files)
+    path(clust_tsv)
 
     output:
     path("${task.process.toLowerCase().replaceFirst('module', 'module-')}")
@@ -23,10 +22,9 @@ process MODULE6 {
     script:
     """
     mg-clust-module-6.py \
-        --tax_files      ${tax_files} \
-        --fun_files      ${fun_files} \
-        --meancov_table  ${meancov_table} \
-        --readscov_table ${readscov_table} \
+        --meancov_files  ${meancov_files} \
+        --readscov_files ${readscov_files} \
+        --clust_tsv      ${clust_tsv} \
         --clust_thres    ${params.clust_thres} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')} \
         --overwrite

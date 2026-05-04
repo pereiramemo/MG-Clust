@@ -27,12 +27,10 @@ workflow {
         module2_out = MODULE2(module1_out)
     }
 
-    // MODULE3: Concatenate samples, filter ORFs, create MMseqs2 DB, cluster ORFs, generate abundance tables
+    // MODULE3: Concatenate samples, filter ORFs, create MMseqs2 DB, cluster ORFs
     if (params.stop_at_module >= 3) {
-        orf_files_ch      = module2_out.faa.map     { _sn, faa -> faa }.collect()
-        meancov_files_ch  = module2_out.meancov.map  { _sn, cov -> cov }.collect()
-        readscov_files_ch = module2_out.readscov.map { _sn, cov -> cov }.collect()
-        module3_out       = MODULE3(orf_files_ch, meancov_files_ch, readscov_files_ch)
+        orf_files_ch = module2_out.faa.map { _sn, faa -> faa }.collect()
+        module3_out  = MODULE3(orf_files_ch)
     }
 
     // MODULE4: Taxonomic annotation of contigs against GTDB using MMseqs2
@@ -50,16 +48,11 @@ workflow {
         module5_out = MODULE5(faa)
     }
 
-    // MODULE6: Merge taxonomy, function, and abundance tables
+    // MODULE6: Build unified OPU-ORF coverage table
     if (params.stop_at_module >= 6) {
-        tax_files_ch = module4_out.tax_workable.collect()
-        fun_files_ch = module5_out.fun_workable.collect()
-        MODULE6(
-            tax_files_ch,
-            fun_files_ch,
-            module3_out.meancov_workable,
-            module3_out.readscov_workable
-        )
+        meancov_files  = module2_out.meancov.map { _sn, path -> path }.collect()
+        readscov_files = module2_out.readscov.map { _sn, path -> path }.collect()
+        clust_tsv      = module3_out.clust_tsv
+        module6_out    = MODULE6(meancov_files, readscov_files, clust_tsv)
     }
-
 }

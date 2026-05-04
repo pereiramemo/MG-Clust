@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-mg-clust module 6: Merge taxonomy, function, and abundance tables.
+mg-clust module 6: Build unified OPU-ORF coverage table.
 
-Assumes execution inside the conda environment "mg-clust-module-6" (or equivalent)
-where duckdb is importable.
+Assumes execution inside the conda environment "mg-clust-module-6" (or equivalent).
 
-- Concatenates per-sample ORF taxonomy annotation files (*_orf_tax_annot_workable.tsv)
-  into a single orf_tax_annot_workable.tsv
-- Concatenates per-sample ORF function annotation files (*_orf_fun_annot_workable.tsv)
-  into a single orf_fun_annot_workable.tsv
-- Merges the clustering abundance tables (meancov, readscov) from module 4 with the
-  concatenated taxonomy and function tables using DuckDB, joining on cluster representative
-  ORF ID (clust_id = orf_id), to produce orfs_clust_id<N>perc_meancov2taxa2fun_workable.tsv
+- Concatenates per-sample mean coverage tables
+- Concatenates per-sample read coverage tables
+- Joins both coverages to the clustering TSV via DuckDB to produce:
+  opu_id, orf_id, read_coverage, mean_coverage
 """
 
 ###############################################################################
@@ -19,9 +15,11 @@ where duckdb is importable.
 ###############################################################################
 
 import argparse
-import sys, os
+import os
 import shutil
+import sys
 import duckdb
+
 sys.path.insert(0, os.path.dirname(__file__))
 from utils import check_file
 
@@ -35,89 +33,107 @@ from utils import check_file
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=f"{os.path.basename(__file__)}: Merge taxonomy, function, and OPU abundance tables", add_help=False)
+        description=f"{os.path.basename(__file__)}: Build unified OPU-ORF coverage table",
+        add_help=False,
+    )
 
     parser.add_argument("--help", action="help", help="print this help")
 
-    parser.add_argument("--tax_files", dest="tax_files", required=True, nargs="+",
-        help="per-sample ORF taxonomy annotation files (*_orf_tax_annot_workable.tsv)")
+    parser.add_argument("--meancov_files", dest="meancov_files", required=True, nargs="+",
+        help="list of per-sample mean coverage tables (*_orfs_meancov.tsv)",
+    )
 
-    parser.add_argument("--fun_files", dest="fun_files", required=True, nargs="+",
-        help="per-sample ORF function annotation files (*_orf_fun_annot_workable.tsv)")
+    parser.add_argument("--readscov_files", dest="readscov_files", required=True, nargs="+",
+        help="list of per-sample read coverage tables (*_orfs_readscov.tsv)",
+    )
 
-    parser.add_argument("--meancov_table", dest="meancov_table", required=True,
-        help="collapsed mean coverage workable table from module 4 "
-             "(orfs_clust_id*_meancov_workable.tsv)")
-
-    parser.add_argument("--readscov_table", dest="readscov_table", required=True,
-        help="collapsed reads coverage workable table from module 4 "
-             "(orfs_clust_id*_readscov_workable.tsv)")
+    parser.add_argument("--clust_tsv", dest="clust_tsv", required=True,
+        help="MMseqs2 clustering TSV from module 3 (columns: opu_id, orf_id)",
+    )
 
     parser.add_argument("--clust_thres", dest="clust_thres", type=float, default=0.7,
-        help="clustering threshold used in module 4; used to name the output file (default: 0.7)")
+        help="clustering threshold used to name the output file (default: 0.7)",
+    )
 
     parser.add_argument("--output_dir", dest="output_dir", required=True,
-        help="directory to output generated data")
+        help="directory to output generated data",
+    )
 
     parser.add_argument("--overwrite", dest="overwrite", action="store_true", default=False,
-        help="overwrite previous folder if present (default: False)")
+        help="overwrite previous folder if present (default: False)",
+    )
 
     return parser.parse_args()
 
+
 ###############################################################################
-# 2.2 Concatenate TSV files with basic validation
+# 2.2 Concatenate table files
 ###############################################################################
 
-def concat_workable_tsv(input_files: list[str], output_file: str, label: str) -> None:
-    non_empty_lines = 0
-    tabbed_lines = 0
-
+def concat_tables(input_files: list[str], output_file: str) -> None:
+    """Concatenate all files in input_files into output_file."""
     try:
-        with open(output_file, "w", encoding="utf-8") as out_fh:
-            for in_path in input_files:
-                with open(in_path, "r", encoding="utf-8") as in_fh:
-                    for raw_line in in_fh:
-                        line = raw_line.rstrip("\n")
-                        if not line.strip():
-                            continue
-                        non_empty_lines += 1
-                        if "\t" in line:
-                            tabbed_lines += 1
-                        out_fh.write(line + "\n")
+        with open(output_file, "wb") as out_fh:
+            for in_file in input_files:
+                check_file(in_file, "coverage file")
+                with open(in_file, "rb") as in_fh:
+                    shutil.copyfileobj(in_fh, out_fh)
     except Exception as exc:
-        print(f"concatenating {label} files failed: {exc}", file=sys.stderr)
+        print(f"concatenating files into {output_file} failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    if non_empty_lines == 0:
-        print(f"{label} concatenation produced an empty file: {output_file}", file=sys.stderr)
+
+###############################################################################
+# 2.3 Build unified OPU-ORF coverage table via DuckDB
+###############################################################################
+
+def build_unified_table(
+    clust_tsv: str,
+    meancov_tsv: str,
+    readscov_tsv: str,
+    output_tsv: str,
+) -> None:
+    cov_cols = "{'contig_id':'VARCHAR','start':'BIGINT','end':'BIGINT','strand':'VARCHAR','orf_id':'VARCHAR','coverage':'DOUBLE'}"
+    clust_cols = "{'opu_id':'VARCHAR','orf_id':'VARCHAR'}"
+
+    sql = f"""
+        COPY (
+            SELECT
+                c.opu_id,
+                c.orf_id,
+                COALESCE(r.coverage, 0.0) AS read_coverage,
+                COALESCE(m.coverage, 0.0) AS mean_coverage
+            FROM read_csv('{clust_tsv}', delim='\t', header=false,
+                          columns={clust_cols}) AS c
+            LEFT JOIN read_csv('{readscov_tsv}', delim='\t', header=false,
+                               columns={cov_cols}) AS r ON c.orf_id = r.orf_id
+            LEFT JOIN read_csv('{meancov_tsv}', delim='\t', header=false,
+                               columns={cov_cols}) AS m ON c.orf_id = m.orf_id
+        ) TO '{output_tsv}' (HEADER true, DELIMITER '\t')
+    """
+    try:
+        duckdb.execute(sql)
+    except Exception as exc:
+        print(f"building unified table {output_tsv} failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    if tabbed_lines == 0:
-        print(
-            f"{label} concatenation produced no tab-delimited lines: {output_file}; "
-            "input files may be malformed or not TSV",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 
 ###############################################################################
 # 3. Define the main function
 ###############################################################################
 
 def main() -> None:
-
     args = parse_args()
 
     ###########################################################################
     # 3.1. Check mandatory files
     ###########################################################################
 
-    for f in args.tax_files:
-        check_file(f, "taxonomy annotation file")
-    for f in args.fun_files:
-        check_file(f, "function annotation file")
-    check_file(args.meancov_table, "mean coverage workable table")
-    check_file(args.readscov_table, "reads coverage workable table")
+    check_file(args.clust_tsv, "cluster TSV")
+    for f in args.meancov_files:
+        check_file(f, "mean coverage file")
+    for f in args.readscov_files:
+        check_file(f, "reads coverage file")
 
     ###########################################################################
     # 3.2. Check output directory
@@ -144,165 +160,31 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.4. Concatenate taxonomy annotation files
+    # 3.4. Concatenate coverage files
     ###########################################################################
 
-    orf_tax_annot = os.path.join(args.output_dir, "orf_tax_annot_workable.tsv")
+    meancov_concat = os.path.join(args.output_dir, "orfs_meancov.tsv")
+    readscov_concat = os.path.join(args.output_dir, "orfs_readscov.tsv")
 
-    concat_workable_tsv(args.tax_files, orf_tax_annot, "taxonomy annotation")
-
-    ###########################################################################
-    # 3.5. Concatenate function annotation files
-    ###########################################################################
-
-    orf_fun_annot = os.path.join(args.output_dir, "orf_fun_annot_workable.tsv")
-
-    concat_workable_tsv(args.fun_files, orf_fun_annot, "function annotation")
+    concat_tables(args.meancov_files, meancov_concat)
+    concat_tables(args.readscov_files, readscov_concat)
 
     ###########################################################################
-    # 3.6. Merge tables with DuckDB
+    # 3.5. Build unified OPU-ORF coverage table
     ###########################################################################
 
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".") + "perc"
-    merged_table = os.path.join(
+    out_table = os.path.join(
         args.output_dir,
-        f"orfs_clust_id{clust_thres_str}_cov2taxa2fun_workable.tsv"
+        f"orfs_clust_id{clust_thres_str}_orf_cov_workable.tsv",
     )
 
-    try:
-        con = duckdb.connect()
+    build_unified_table(args.clust_tsv, meancov_concat, readscov_concat, out_table)
 
-        con.execute("""
-            CREATE TABLE meancov AS
-            SELECT
-                TRIM(column0) AS sample_name,
-                TRIM(column1) AS clust_id,
-                TRY_CAST(column2 AS DOUBLE) AS abund
-            FROM read_csv(
-                ?,
-                delim='\t',
-                header=false,
-                auto_detect=false,
-                strict_mode=false,
-                null_padding=true,
-                ignore_errors=true,
-                columns={'column0':'VARCHAR','column1':'VARCHAR','column2':'VARCHAR'}
-            )
-            WHERE column0 IS NOT NULL AND column1 IS NOT NULL
-        """, [args.meancov_table])
 
-        con.execute("""
-            CREATE TABLE readscov AS
-            SELECT
-                TRIM(column0) AS sample_name,
-                TRIM(column1) AS clust_id,
-                TRY_CAST(column2 AS DOUBLE) AS abund
-            FROM read_csv(
-                ?,
-                delim='\t',
-                header=false,
-                auto_detect=false,
-                strict_mode=false,
-                null_padding=true,
-                ignore_errors=true,
-                columns={'column0':'VARCHAR','column1':'VARCHAR','column2':'VARCHAR'}
-            )
-            WHERE column0 IS NOT NULL AND column1 IS NOT NULL
-        """, [args.readscov_table])
-
-        # tax columns: sample_name, orf_id, taxid, rank, name, lineage
-        con.execute("""
-            CREATE TABLE tax AS
-            SELECT TRIM(column0) AS sample_name, TRIM(column1) AS orf_id,
-                   column2 AS taxid, column3 AS rank, column4 AS name, column5 AS lineage
-            FROM read_csv(
-                ?,
-                delim='\t',
-                header=false,
-                auto_detect=false,
-                strict_mode=false,
-                null_padding=true,
-                ignore_errors=true,
-                columns={
-                    'column0':'VARCHAR',
-                    'column1':'VARCHAR',
-                    'column2':'VARCHAR',
-                    'column3':'VARCHAR',
-                    'column4':'VARCHAR',
-                    'column5':'VARCHAR'
-                }
-            )
-            WHERE column1 IS NOT NULL
-        """, [orf_tax_annot])
-
-        # fun columns: sample_name, orf_id, ko_id, score, evalue
-        con.execute("""
-            CREATE TABLE fun AS
-            SELECT
-                TRIM(column0) AS sample_name,
-                TRIM(column1) AS orf_id,
-                column2 AS ko_id,
-                TRY_CAST(column3 AS DOUBLE) AS score,
-                TRY_CAST(column4 AS DOUBLE) AS evalue
-            FROM read_csv(
-                ?,
-                delim='\t',
-                header=false,
-                auto_detect=false,
-                strict_mode=false,
-                null_padding=true,
-                ignore_errors=true,
-                columns={
-                    'column0':'VARCHAR',
-                    'column1':'VARCHAR',
-                    'column2':'VARCHAR',
-                    'column3':'VARCHAR',
-                    'column4':'VARCHAR'
-                }
-            )
-            WHERE column1 IS NOT NULL
-        """, [orf_fun_annot])
-
-        # Left join on clust_id = orf_id: taxonomy and function are looked up
-        # from the cluster representative ORF (clust_id encodes the representative's
-        # sample and ORF ID in sample_name|orf_id format, matching the orf_id column
-        # in the tax and fun tables).
-        con.execute(f"""
-            COPY (
-                SELECT
-                    meancov.sample_name,
-                    meancov.clust_id,
-                    meancov.abund           AS meancov,
-                    readscov.abund          AS readscov,
-                    tax.taxid,
-                    tax.rank,
-                    tax.name,
-                    tax.lineage,
-                    fun.ko_id,
-                    fun.score               AS fun_score,
-                    fun.evalue              AS fun_evalue
-                FROM meancov
-                LEFT JOIN readscov
-                    ON  meancov.sample_name = readscov.sample_name
-                    AND meancov.clust_id    = readscov.clust_id
-                LEFT JOIN tax ON meancov.clust_id = tax.orf_id
-                LEFT JOIN fun ON meancov.clust_id = fun.orf_id
-                ORDER BY meancov.sample_name, meancov.clust_id
-            ) TO '{merged_table}' (DELIMITER '\t', HEADER true)
-        """)
-
-        con.close()
-
-    except Exception as exc:
-        print(f"DuckDB merge failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"{os.path.basename(__file__)} exited successfully")
-    sys.exit(0)
-
-###########################################################################
+###############################################################################
 # 4. Run the main function
-###########################################################################
+###############################################################################
 
 if __name__ == "__main__":
     main()
