@@ -17,24 +17,31 @@ workflow {
         checkIfExists: true
     )
 
-    log.info "Pipeline will run up to module ${params.stop_at_module}"
+    stop = params.stop_at_module as Integer
+    log.info "Pipeline will run up to module ${stop}"
+    if ("${params.skip_tax_annot}" == "true") {
+        log.info "Taxonomic annotation will be skipped"
+    }
+    if ("${params.skip_fun_annot}" == "true") {
+        log.info "Functional annotation will be skipped"
+    }
 
     // MODULE1: Assembly + read mapping (always runs)
     module1_out = MODULE1(reads_ch)
 
     // MODULE2: ORF prediction + coverage estimation (per sample)
-    if (params.stop_at_module >= 2) {
+    if (stop >= 2) {
         module2_out = MODULE2(module1_out)
     }
 
     // MODULE3: Concatenate samples, filter ORFs, create MMseqs2 DB, cluster ORFs
-    if (params.stop_at_module >= 3) {
+    if (stop >= 3) {
         orf_files_ch = module2_out.faa.map { _sn, faa -> faa }.collect()
         module3_out  = MODULE3(orf_files_ch)
     }
 
     // MODULE4: Taxonomic annotation of contigs against GTDB using MMseqs2
-    if (params.stop_at_module >= 4) {
+    if (stop >= 4 && !params.skip_tax_annot) {
         contigs_ch = module1_out
                     .map { sample_name, assembly, _bam -> tuple(sample_name, assembly) }
                     .join(module2_out.bed, by : 0) // joins on sample_name, produces tuple(sample_name, assembly, orf_bed)
@@ -43,16 +50,20 @@ workflow {
     }
 
     // MODULE5: Functional annotation of ORFs against KO HMMs using pyHMMER
-    if (params.stop_at_module >= 5) {
+    if (stop >= 5 && !params.skip_fun_annot) {
         faa = module2_out.faa.map { sample_name, faa_path -> tuple(sample_name, faa_path) }
         module5_out = MODULE5(faa)
     }
 
     // MODULE6: Build unified OPU-ORF coverage table
-    if (params.stop_at_module >= 6) {
+    if (stop >= 6) {
         meancov_files  = module2_out.meancov.map { _sn, path -> path }.collect()
         readscov_files = module2_out.readscov.map { _sn, path -> path }.collect()
+        tax_annot_files = module4_out.tax_annot.collect()
+        fun_annot_files = module5_out.fun_annot.collect()
         clust_tsv      = module3_out.clust_tsv
-        module6_out    = MODULE6(meancov_files, readscov_files, clust_tsv)
+        module6_out    = MODULE6(meancov_files, readscov_files, clust_tsv,
+                                 tax_annot_files, fun_annot_files)
     }
+
 }

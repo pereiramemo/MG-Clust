@@ -7,8 +7,8 @@
 
 process MODULE3 {
 
-    container "ghcr.io/epereira/mg-clust/${task.process.toLowerCase().replaceFirst('module', 'module-')}:latest"
-    publishDir "${params.output_dir}/",
+    container "ghcr.io/epereira/mg-clust/module-3:latest"
+    publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
            enabled: params.full_output || params.stop_at_module == 3            
 
@@ -18,9 +18,9 @@ process MODULE3 {
 
     output:
     path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_filt_db-minlen${params.min_orf_length}aa/"),         emit: orfs_filt_db
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_clust-id*/orfs_clust-id*.tsv"), emit: clust_tsv
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs.faa"),   emit: orfs_faa
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_filt-minlen${params.min_orf_length}aa.faa"),   emit: orfs_filt_faa
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_clust-minlen${params.min_orf_length}aa-id*perc/orfs_clust-minlen${params.min_orf_length}aa-id*perc.tsv"),                      emit: clust_tsv
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs.faa"),                                               emit: orfs_faa
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_filt-minlen${params.min_orf_length}aa.faa"),         emit: orfs_filt_faa
     script:
     """
     mg-clust-module-3.py \

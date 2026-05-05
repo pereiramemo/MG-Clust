@@ -216,11 +216,12 @@ def main() -> None:
     # flags taken from https://broadinstitute.github.io/picard/explain-flags.html
     # secondary alignments are moved; however this makes very little difference
     # ORFs coverage using F4 vs F260 flags had a MSE=0.00486 and Pearson cor 0.997 (same toydataset)
+    # Here we use -F 2308 (4 + 256 + 2048 = 2308) to filter out unmapped, secondary alignments, and supplementary alignments
 
     bam_path = os.path.join(args.output_dir, f"{args.sample_name}.bam")
     try:
         run([samtools, "view", "-@", str(args.nslots), 
-             "-q", "10", "-F", "260", "-b", "-o", bam_path, sam_path])
+             "-q", "10", "-F", "2308", "-b", "-o", bam_path, sam_path])
     except subprocess.CalledProcessError:
         print("samtools convert to bam failed", file=sys.stderr)
         sys.exit(1)
@@ -299,6 +300,10 @@ def main() -> None:
         except Exception:
             print("removing assembly intermediate files failed", file=sys.stderr)
             sys.exit(1)
+
+    ########################################################################### 
+    # 3.10. Write output log and exit
+    ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")
     sys.exit(0)

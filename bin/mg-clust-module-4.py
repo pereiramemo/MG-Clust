@@ -265,7 +265,7 @@ def main() -> None:
         print(f"reading taxonomy TSV failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    orf_tax_tsv = os.path.join(args.output_dir, f"{args.sample_name}_orf_tax_annot_workable.tsv")
+    orf_tax_tsv = os.path.join(args.output_dir, f"{args.sample_name}_orf_tax_annot.tsv")
 
     try:
         with open(args.bed_file, "r", encoding="utf-8") as bed_fh, \
@@ -277,12 +277,16 @@ def main() -> None:
                 contig_id = parts[0]
                 orf_id    = parts[4]
                 # Left join: fill with empty strings when contig has no taxonomy hit
-                tax_fields = (tax_map.get(contig_id, []) + ["", "", "", ""])
+                tax_fields = (tax_map.get(contig_id, "NA"))
                 out_fh.write(f"{orf_id}\t" + "\t".join(tax_fields) + "\n")
     except Exception as exc:
         print(f"mapping ORFs to taxonomy failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    ########################################################################### 
+    # 3.10. Write output log and exit
+    ###########################################################################
+    
     print(f"{os.path.basename(__file__)} exited successfully")
     sys.exit(0)
 

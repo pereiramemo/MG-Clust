@@ -6,8 +6,8 @@
 
 process MODULE2 {
 
-    container "ghcr.io/epereira/mg-clust/${task.process.toLowerCase().replaceFirst('module', 'module-')}:latest"
-    publishDir "${params.output_dir}/${task.process.toLowerCase().replaceFirst('module', 'module-')}/",
+    container "ghcr.io/epereira/mg-clust/module-2:latest"
+    publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
            enabled: params.full_output || params.stop_at_module == 2            
             
@@ -18,10 +18,10 @@ process MODULE2 {
     tuple val(sample_name), path(assembly), path(bam)
 
     output:
-    tuple val(sample_name), path("${sample_name}/${sample_name}_orfs.faa"),          emit: faa
-    tuple val(sample_name), path("${sample_name}/${sample_name}_orfs.bed"),          emit: bed
-    tuple val(sample_name), path("${sample_name}/${sample_name}_orfs_meancov.tsv"),  emit: meancov
-    tuple val(sample_name), path("${sample_name}/${sample_name}_orfs_readscov.tsv"), emit: readscov
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs.faa"),          emit: faa
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs.bed"),          emit: bed
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_meancov.tsv"),  emit: meancov
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_readscov.tsv"), emit: readscov
 
     script:
     """
@@ -29,7 +29,7 @@ process MODULE2 {
         --assembly_file  ${assembly} \
         --bam_file       ${bam} \
         --sample_name    ${sample_name} \
-        --output_dir     ${sample_name} \
+        --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --nslots         ${params.nslots} \
         --train_file_name ${params.train_file_name} \
         --overwrite

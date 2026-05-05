@@ -6,8 +6,8 @@
 
 process MODULE5 {
 
-    container "ghcr.io/epereira/mg-clust/${task.process.toLowerCase().replaceFirst('module', 'module-')}:latest"
-    publishDir "${params.output_dir}/${task.process.toLowerCase().replaceFirst('module', 'module-')}/",
+    container "ghcr.io/epereira/mg-clust/module-5:latest"
+    publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
            enabled: params.full_output || params.stop_at_module == 5         
 
@@ -17,8 +17,7 @@ process MODULE5 {
     tuple val(sample_name), path(orfs_faa)
 
     output:
-    path("${sample_name}"),                                                           emit: sample_dir
-    path("${sample_name}/${sample_name}_orf_fun_annot_workable.tsv"),                 emit: fun_workable
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orf_fun_annot.tsv"),   emit: fun_annot
 
     script:
     """
@@ -29,7 +28,7 @@ process MODULE5 {
         --evalue_thres  ${params.evalue_thres} \
         ${params.cut_ga ? '--cut_ga' : '--no-cut_ga'} \
         --nslots        ${params.nslots} \
-        --output_dir    ${sample_name} \
+        --output_dir    ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --overwrite
     """
 }

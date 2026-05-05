@@ -47,6 +47,14 @@ def parse_args() -> argparse.Namespace:
         help="list of per-sample read coverage tables (*_orfs_readscov.tsv)",
     )
 
+    parser.add_argument("--tax_annot_files", dest="tax_annot_files", required=True, nargs="+",
+        help="list of per-sample taxonomy annotation files (*_orf_tax_annot.tsv)",
+    )
+
+    parser.add_argument("--fun_annot_files", dest="fun_annot_files", required=True, nargs="+",
+        help="list of per-sample functional annotation files (*_orf_fun_annot.tsv)",
+    )
+
     parser.add_argument("--clust_tsv", dest="clust_tsv", required=True,
         help="MMseqs2 clustering TSV from module 3 (columns: opu_id, orf_id)",
     )
@@ -54,6 +62,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clust_thres", dest="clust_thres", type=float, default=0.7,
         help="clustering threshold used to name the output file (default: 0.7)",
     )
+
+    parser.add_argument("--min_orf_length", dest="min_orf_length", type=int, default=100,
+        help="minimum ORF length used to filter ORFs (default: 100)",
+    )
+
 
     parser.add_argument("--output_dir", dest="output_dir", required=True,
         help="directory to output generated data",
@@ -82,7 +95,6 @@ def concat_tables(input_files: list[str], output_file: str) -> None:
         print(f"concatenating files into {output_file} failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-
 ###############################################################################
 # 2.3 Build unified OPU-ORF coverage table via DuckDB
 ###############################################################################
@@ -91,30 +103,74 @@ def build_unified_table(
     clust_tsv: str,
     meancov_tsv: str,
     readscov_tsv: str,
-    output_tsv: str,
+ #   tax_annot_tsv: str,
+    fun_annot_tsv: str,
+    output1_tsv: str,
 ) -> None:
-    cov_cols = "{'contig_id':'VARCHAR','start':'BIGINT','end':'BIGINT','strand':'VARCHAR','orf_id':'VARCHAR','coverage':'DOUBLE'}"
+    
+    cov_cols = "{'contig_id':'VARCHAR','start':'BIGINT','end':'BIGINT','strand':'VARCHAR', \
+                 'orf_id':'VARCHAR','coverage':'DOUBLE', 'sample_name':'VARCHAR'}"
+    
     clust_cols = "{'opu_id':'VARCHAR','orf_id':'VARCHAR'}"
+
+#    tax_cols = "{'orf_id':'VARCHAR','tax_id':'VARCHAR', 'tax_rank':'VARCHAR', 'tax_name':'VARCHAR', \
+#                 'retained_fragments':'BIGINT', 'total_fragments':'BIGINT', 'agreed_fragments':'BIGINT', \
+#                 'support':'DOUBLE', 'tax_lineage':'VARCHAR'}"
+    
+    fun_cols = "{'orf_id':'VARCHAR','fun_id':'VARCHAR','score':'DOUBLE', 'evalue':'DOUBLE'}"
 
     sql = f"""
         COPY (
             SELECT
+                r.sample_name,
                 c.opu_id,
                 c.orf_id,
                 COALESCE(r.coverage, 0.0) AS read_coverage,
-                COALESCE(m.coverage, 0.0) AS mean_coverage
+                COALESCE(m.coverage, 0.0) AS mean_coverage,
+                f.fun_id
             FROM read_csv('{clust_tsv}', delim='\t', header=false,
                           columns={clust_cols}) AS c
             LEFT JOIN read_csv('{readscov_tsv}', delim='\t', header=false,
                                columns={cov_cols}) AS r ON c.orf_id = r.orf_id
             LEFT JOIN read_csv('{meancov_tsv}', delim='\t', header=false,
                                columns={cov_cols}) AS m ON c.orf_id = m.orf_id
-        ) TO '{output_tsv}' (HEADER true, DELIMITER '\t')
+            LEFT JOIN read_csv('{fun_annot_tsv}', delim='\t', header=false,
+                               columns={fun_cols}) AS f ON c.orf_id = f.orf_id
+        ) TO '{output1_tsv}' (HEADER true, DELIMITER '\t')
     """
     try:
         duckdb.execute(sql)
     except Exception as exc:
-        print(f"building unified table {output_tsv} failed: {exc}", file=sys.stderr)
+        print(f"building unified table {output1_tsv} failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+###############################################################################
+# 2.4 Collapse coverage tables OPU ID
+###############################################################################
+
+def build_collapsed_table(
+    output1_tsv: str,
+    output2_tsv: str,
+) -> None:
+    output1_cols = "{'sample_name':'VARCHAR','opu_id':'VARCHAR','orf_id':'VARCHAR', \
+                    'read_coverage':'DOUBLE','mean_coverage':'DOUBLE','fun_id':'VARCHAR'}"
+
+    sql = f"""
+        COPY (
+            SELECT
+                o1.sample_name,
+                o1.opu_id,
+                SUM(o1.read_coverage) AS read_coverage,
+                SUM(o1.mean_coverage) AS mean_coverage
+            FROM read_csv('{output1_tsv}', delim='\t', header=true,
+                          columns={output1_cols}) AS o1
+            GROUP BY o1.sample_name, o1.opu_id
+        ) TO '{output2_tsv}' (HEADER true, DELIMITER '\t')
+    """
+    try:
+        duckdb.execute(sql)
+    except Exception as exc:
+        print(f"building collapsed table {output2_tsv} failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -170,16 +226,47 @@ def main() -> None:
     concat_tables(args.readscov_files, readscov_concat)
 
     ###########################################################################
+    # 3.5. Concatenate annot files
+    ###########################################################################
+
+    tax_annot_concat = os.path.join(args.output_dir, "orf_tax_annot.tsv")
+    fun_annot_concat = os.path.join(args.output_dir, "orf_fun_annot.tsv")
+
+    concat_tables(args.tax_annot_files, tax_annot_concat)
+    concat_tables(args.fun_annot_files, fun_annot_concat)
+
+    ###########################################################################
     # 3.5. Build unified OPU-ORF coverage table
     ###########################################################################
 
-    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".") + "perc"
-    out_table = os.path.join(
+    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
+    output_table1 = os.path.join(
         args.output_dir,
-        f"orfs_clust_id{clust_thres_str}_orf_cov_workable.tsv",
+        f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc-coverage.tsv",
     )
 
-    build_unified_table(args.clust_tsv, meancov_concat, readscov_concat, out_table)
+    build_unified_table(args.clust_tsv, meancov_concat, readscov_concat, 
+                        fun_annot_concat, 
+                        output_table1)
+
+    ###########################################################################
+    # 3.6. Build collapsed by sample and OPU ID coverage table
+    ###########################################################################
+
+    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
+    output_table2 = os.path.join(
+        args.output_dir,
+        f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc-collapsed_coverage.tsv",
+    )
+
+    build_collapsed_table(output_table1, output_table2)
+
+    ########################################################################### 
+    # 3.7. Write output log and exit
+    ###########################################################################
+    
+    print(f"{os.path.basename(__file__)} exited successfully")
+    sys.exit(0)
 
 
 ###############################################################################

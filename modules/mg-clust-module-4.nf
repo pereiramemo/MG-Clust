@@ -6,8 +6,8 @@
 
 process MODULE4 {
     
-    container "ghcr.io/epereira/mg-clust/${task.process.toLowerCase().replaceFirst('module', 'module-')}:latest"
-    publishDir "${params.output_dir}/${task.process.toLowerCase().replaceFirst('module', 'module-')}/",
+    container "ghcr.io/epereira/mg-clust/module-4:latest"
+    publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
            enabled: params.full_output || params.stop_at_module == 4           
 
@@ -18,8 +18,7 @@ process MODULE4 {
     tuple val(sample_name), path(assembly), path(orf_bed)
 
     output:
-    path("${sample_name}"),                                                           emit: sample_dir
-    path("${sample_name}/${sample_name}_orf_tax_annot_workable.tsv"),                 emit: tax_workable
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orf_tax_annot.tsv"),    emit: tax_annot
 
     script:
     """
@@ -32,7 +31,7 @@ process MODULE4 {
         --sensitivity   ${params.sensitivity} \
         --tax_lineage   ${params.tax_lineage} \
         --nslots        ${params.nslots} \
-        --output_dir    ${sample_name} \
+        --output_dir    ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --overwrite
     """
 }

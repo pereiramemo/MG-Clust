@@ -1,6 +1,0 @@
-name: mg-clust-module-7
-channels:
-  - conda-forge
-dependencies:
-  - python>=3.10
-  - duckdb>=1.0

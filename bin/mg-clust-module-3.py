@@ -195,7 +195,7 @@ def main() -> None:
     ###########################################################################
 
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
-    clust_dir = os.path.join(args.output_dir, f"orfs_clust-id{clust_thres_str}perc-minlen{args.min_orf_length}aa")
+    clust_dir = os.path.join(args.output_dir, f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc")
 
     try:
         os.makedirs(clust_dir, exist_ok=False)
@@ -204,7 +204,7 @@ def main() -> None:
         sys.exit(1)
 
     tmp_dir = os.path.join(clust_dir, "tmp")
-    clust_db = os.path.join(clust_dir, f"orfs_clust-id{clust_thres_str}perc-minlen{args.min_orf_length}aa")
+    clust_db = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc")
 
     try:
         run(
@@ -235,7 +235,7 @@ def main() -> None:
     # 3.7. Convert clustering results to TSV
     ###########################################################################
 
-    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-id{clust_thres_str}perc-minlen{args.min_orf_length}aa.tsv")
+    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc.tsv")
 
     try:
         run(
@@ -252,6 +252,12 @@ def main() -> None:
         print("mmseqs createtsv failed", file=sys.stderr)
         sys.exit(1)
 
+    ########################################################################### 
+    # 3.8. Write output log and exit
+    ###########################################################################
+    
+    print(f"{os.path.basename(__file__)} exited successfully")
+    sys.exit(0)
 
 ###########################################################################
 # 4. Run the main function

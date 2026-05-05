@@ -228,7 +228,7 @@ def main() -> None:
     # 3.6. Write best-hit annotation table
     ###########################################################################
 
-    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orf_fun_annot_workable.tsv")
+    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orf_fun_annot.tsv")
 
     try:
         write_best_hits(domtblout, annotation_table)
@@ -236,6 +236,10 @@ def main() -> None:
         print(f"Writing annotation table failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    ########################################################################### 
+    # 3.7. Write output log and exit
+    ###########################################################################
+    
     print(f"{os.path.basename(__file__)} exited successfully")
     sys.exit(0)
 

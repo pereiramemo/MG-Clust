@@ -69,6 +69,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 ###############################################################################
+# 2.2 Add sample name to coverage tables
+###############################################################################
+
+def add_sample(coverage_file: str, sample_name: str) -> None:
+    try:
+        with open(coverage_file, "r", encoding="utf-8") as fh_in, \
+             open(f"{coverage_file}.tmp", "w", encoding="utf-8") as fh_out:
+            for line in fh_in:
+                fh_out.write(f"{line.strip()}\t{sample_name}\n")
+        os.replace(f"{coverage_file}.tmp", coverage_file)
+    except Exception as exc:
+        print(f"Adding sample name to coverage file {coverage_file} failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+###############################################################################
 # 3. Define the main function
 ###############################################################################
 
@@ -200,6 +215,17 @@ def main() -> None:
     except subprocess.CalledProcessError:
         print("bedtools to compute mean coverage failed", file=sys.stderr)
         sys.exit(1)
+
+    ###########################################################################
+    # 3.8. Add sample names to mean coverage and read counts tables
+    ###########################################################################
+
+    add_sample(bedtool_reads, args.sample_name)
+    add_sample(bedtools_mean, args.sample_name)
+
+    ########################################################################### 
+    # 3.9. Write output log and exit
+    ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")
     sys.exit(0)
