@@ -53,6 +53,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evalue_thres", dest="evalue_thres", type=float, default=1e-3,
         help="e-value threshold for hmmsearch (default: 1e-3; ignored when --cut_ga is set)")
 
+    parser.add_argument("--min_orf_len", dest="min_orf_len", type=int, default=60,
+        help="minimum ORF length (default: 60)")
+
     parser.add_argument("--cut_ga", dest="cut_ga",
         action=argparse.BooleanOptionalAction, default=False,
         help="use per-model gathering thresholds (default: False; use --cut_ga to enable)")
@@ -228,7 +231,7 @@ def main() -> None:
     # 3.6. Write best-hit annotation table
     ###########################################################################
 
-    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orfs_fun_annot.tsv")
+    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orfs-minlen{args.min_orf_len}aa-fun_annot.tsv")
 
     try:
         write_best_hits(domtblout, annotation_table)

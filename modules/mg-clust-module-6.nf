@@ -30,6 +30,7 @@ process MODULE6 {
         --tax_annot_files ${tax_annot_files} \
         --fun_annot_files ${fun_annot_files} \
         --clust_thres    ${params.clust_thres} \
+        --min_orf_len    ${params.min_orf_len} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')} \
         --overwrite
     """

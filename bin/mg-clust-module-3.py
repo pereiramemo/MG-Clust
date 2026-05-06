@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads used (default: 4)")
 
-    parser.add_argument("--min_orf_length", dest="min_orf_length", type=int, default=60,
+    parser.add_argument("--min_orf_len", dest="min_orf_len", type=int, default=60,
         help="minimum length of ORFs (amino acids); ORFs shorter than this will be discarded (default: 60)")
 
     parser.add_argument("--clust_thres", dest="clust_thres", type=float, default=0.7,
@@ -129,7 +129,7 @@ def main() -> None:
     # 3.4. Filter ORFs by length
     ###########################################################################
 
-    concat_orfs_filt = os.path.join(args.output_dir, f"orfs_filt-minlen{args.min_orf_length}aa.faa")
+    concat_orfs_filt = os.path.join(args.output_dir, f"orfs_filt-minlen{args.min_orf_len}aa.faa")
     run_filter = not os.path.isfile(concat_orfs_filt)
 
     if run_filter:
@@ -141,7 +141,7 @@ def main() -> None:
                     f"out={concat_orfs_filt}",
                     "overwrite=t",
                     f"threads={args.nslots}",
-                    f"minlength={args.min_orf_length}",
+                    f"minlength={args.min_orf_len}",
                     "amino=t"
                 ]
             )
@@ -153,7 +153,7 @@ def main() -> None:
     # 3.5. Create mmseqs database
     ###########################################################################
 
-    orfs_filt_db_dir = os.path.join(args.output_dir, f"orfs_filt_db-minlen{args.min_orf_length}aa")
+    orfs_filt_db_dir = os.path.join(args.output_dir, f"orfs_filt_db-minlen{args.min_orf_len}aa")
     orfs_filt_db = os.path.join(orfs_filt_db_dir, "orfs_filt_db")
 
     # .dbtype file is created by mmseqs createdb; if it doesn't exist, the DB needs to be created
@@ -195,7 +195,7 @@ def main() -> None:
     ###########################################################################
 
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
-    clust_dir = os.path.join(args.output_dir, f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc")
+    clust_dir = os.path.join(args.output_dir, f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc")
 
     try:
         os.makedirs(clust_dir, exist_ok=False)
@@ -204,7 +204,7 @@ def main() -> None:
         sys.exit(1)
 
     tmp_dir = os.path.join(clust_dir, "tmp")
-    clust_db = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc")
+    clust_db = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc")
 
     try:
         run(
@@ -235,7 +235,7 @@ def main() -> None:
     # 3.7. Convert clustering results to TSV
     ###########################################################################
 
-    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc.tsv")
+    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc.tsv")
 
     try:
         run(

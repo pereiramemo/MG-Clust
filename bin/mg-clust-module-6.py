@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
         help="clustering threshold used to name the output file (default: 0.7)",
     )
 
-    parser.add_argument("--min_orf_length", dest="min_orf_length", type=int, default=100,
+    parser.add_argument("--min_orf_len", dest="min_orf_len", type=int, default=100,
         help="minimum ORF length used to filter ORFs (default: 100)",
     )
 
@@ -222,7 +222,7 @@ def main() -> None:
         concat_tables(args.tax_annot_files, tax_annot_concat)
 
     if args.fun_annot_files:
-        fun_annot_concat = os.path.join(args.output_dir, "orfs_fun_annot.tsv")
+        fun_annot_concat = os.path.join(args.output_dir, f"orfs-minlen{args.min_orf_len}aa-fun_annot.tsv")
         concat_tables(args.fun_annot_files, fun_annot_concat)
 
     ###########################################################################
@@ -232,7 +232,7 @@ def main() -> None:
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
     output1_tsv = os.path.join(
         args.output_dir,
-        f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc-coverage.tsv",
+        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-coverage.tsv",
     )
 
     build_unified_table(args.clust_tsv, meancov_concat, 
@@ -244,7 +244,7 @@ def main() -> None:
 
     output2_tsv = os.path.join(
         args.output_dir,
-        f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc-collapsed_coverage.tsv",
+        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-collapsed_coverage.tsv",
     )
 
     build_collapsed_table(output1_tsv, output2_tsv)

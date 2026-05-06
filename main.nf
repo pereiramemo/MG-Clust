@@ -11,6 +11,50 @@ include { MODULE6 } from './modules/mg-clust-module-6.nf'
 workflow {
 
     main:
+    if (params.help) {
+        log.info """
+        Mg-Clust: Operational Protein Units from metagenomic paired-end reads
+
+        Usage: nextflow run main.nf [options]
+
+        General:
+          --input_dir       DIR   Input directory with paired-end FASTQ files (default: ${params.input_dir})
+          --reads_pattern   STR   Glob pattern for fromFilePairs (default: ${params.reads_pattern})
+          --output_dir      DIR   Output directory (default: ${params.output_dir})
+          --nslots          INT   CPU threads per tool (default: ${params.nslots})
+          --stop_at_module  INT   Stop after module N, 1-6 (default: ${params.stop_at_module})
+          --full_output     BOOL  Publish all intermediate outputs (default: ${params.full_output})
+          --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: ${params.skip_tax_annot})
+          --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: ${params.skip_fun_annot})
+          --maxForks        INT   Max parallel process instances (default: ${params.maxForks})
+
+        MODULE1 — Assembly:
+          --assem_preset    STR   MEGAHIT preset (default: ${params.assem_preset})
+          --min_contig_len  INT   Minimum contig length in bp (default: ${params.min_contig_len})
+          --min_seq         INT   Minimum reads required to assemble (default: ${params.min_seq})
+
+        MODULE2 — ORF prediction:
+          --train_file_name STR   Prodigal training file name (default: ${params.train_file_name})
+
+        MODULE3 — ORF clustering:
+          --min_orf_len     INT   Minimum ORF length in aa (default: ${params.min_orf_len})
+          --clust_thres     NUM   MMseqs2 identity threshold 0-1 (default: ${params.clust_thres})
+          --clust_cov_len   NUM   MMseqs2 coverage threshold 0-1 (default: ${params.clust_cov_len})
+
+        MODULE4 — Taxonomic annotation (GTDB):
+          --gtdb            PATH  MMseqs2 GTDB database prefix (default: ${params.gtdb})
+          --lca_mode        INT   MMseqs2 LCA mode (default: ${params.lca_mode})
+          --sensitivity     NUM   MMseqs2 sensitivity (default: ${params.sensitivity})
+          --tax_lineage     INT   MMseqs2 --tax-lineage flag (default: ${params.tax_lineage})
+
+        MODULE5 — Functional annotation (KO HMMs):
+          --hmm_db          PATH  KO HMM profiles file (default: ${params.hmm_db})
+          --evalue_thres    NUM   E-value threshold (default: ${params.evalue_thres})
+          --cut_ga          BOOL  Use per-profile GA cutoffs (default: ${params.cut_ga})
+        """.stripIndent()
+        exit 0
+    }
+
     // Read paired-end samples from reads_dir using the pattern defined in nextflow.config
     reads_ch = channel.fromFilePairs(
         "${params.input_dir}/${params.reads_pattern}",
