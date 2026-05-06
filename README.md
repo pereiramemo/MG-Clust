@@ -26,11 +26,10 @@ Mg-Clust/
 ├── bin/                               # Python pipeline scripts
 │   ├── mg-clust-module-1.py           # De novo assembly and read mapping
 │   ├── mg-clust-module-2.py           # ORF prediction and coverage estimation
-│   ├── mg-clust-module-3.py           # ORF filtering and MMseqs2 DB creation
-│   ├── mg-clust-module-4.py           # ORF clustering and abundance tables
-│   ├── mg-clust-module-5.py           # Taxonomic annotation via MMseqs2 + GTDB
-│   ├── mg-clust-module-6.py           # Functional annotation via pyHMMER + KO profiles
-│   ├── mg-clust-module-7.py           # Merge taxonomy, function, and abundance tables
+│   ├── mg-clust-module-3.py           # ORF filtering, MMseqs2 DB creation, and clustering
+│   ├── mg-clust-module-4.py           # Taxonomic annotation via MMseqs2 + GTDB
+│   ├── mg-clust-module-5.py           # Functional annotation via pyHMMER + KO profiles
+│   ├── mg-clust-module-6.py           # Build unified OPU-ORF coverage table
 │   └── utils.py                       # Shared utility functions
 ├── docker/
 │   ├── Dockerfile.module-1            # Docker image for module 1
@@ -39,7 +38,6 @@ Mg-Clust/
 │   ├── Dockerfile.module-4            # Docker image for module 4
 │   ├── Dockerfile.module-5            # Docker image for module 5
 │   ├── Dockerfile.module-6            # Docker image for module 6
-│   ├── Dockerfile.module-7            # Docker image for module 7
 │   ├── dockerbuild_commands.sh        # Build all module images
 │   └── resources/                     # Conda environment YAML files
 │       ├── requirements-module-1.yml
@@ -47,16 +45,14 @@ Mg-Clust/
 │       ├── requirements-module-3.yml
 │       ├── requirements-module-4.yml
 │       ├── requirements-module-5.yml
-│       ├── requirements-module-6.yml
-│       └── requirements-module-7.yml
+│       └── requirements-module-6.yml
 ├── modules/
 │   ├── mg-clust-module-1.nf           # Nextflow process: MODULE1
 │   ├── mg-clust-module-2.nf           # Nextflow process: MODULE2
 │   ├── mg-clust-module-3.nf           # Nextflow process: MODULE3
 │   ├── mg-clust-module-4.nf           # Nextflow process: MODULE4
 │   ├── mg-clust-module-5.nf           # Nextflow process: MODULE5
-│   ├── mg-clust-module-6.nf           # Nextflow process: MODULE6
-│   └── mg-clust-module-7.nf           # Nextflow process: MODULE7
+│   └── mg-clust-module-6.nf           # Nextflow process: MODULE6
 ├── figures/
 │   └── MG-Clust.png                   # Pipeline diagram
 ├── test/                              # Test data and test scripts
@@ -94,12 +90,12 @@ docker build --network=host -f docker/Dockerfile.module-N -t ghcr.io/epereira/mg
 
 ### External databases
 
-Modules 5 and 6 require large reference databases that are **not** bundled in the Docker images. They are downloaded automatically on first use and cached at the paths below (configurable via `nextflow.config`):
+Modules 4 and 5 require large reference databases that are **not** bundled in the Docker images. They are downloaded automatically on first use and cached at the paths below (configurable via `nextflow.config`):
 
 | Module | Database | Default path |
 |---|---|---|
-| 5 | GTDB (MMseqs2 taxonomy) | `~/.mg-clust/db/gtdb/gtdb` |
-| 6 | KEGG KO HMM profiles | `~/.mg-clust/db/ko/ko_profiles.hmm` |
+| 4 | GTDB (MMseqs2 taxonomy) | `~/.mg-clust/db/gtdb/gtdb` |
+| 5 | KEGG KO HMM profiles | `~/.mg-clust/db/ko/ko_profiles.hmm` |
 
 The database directories are bind-mounted into the containers at runtime so the download is persistent across runs.
 
@@ -139,8 +135,11 @@ All parameters can be set in `nextflow.config` or passed on the command line wit
 | `output_dir` | `./test/mg-clust-output` | Directory where all module outputs are published |
 | `reads_pattern` | `*_R{1,2}*.fastq` | Glob pattern used to match paired-end read files |
 | `nslots` | `16` | Number of threads per process |
-| `stop_at_module` | `4` | Stop the pipeline after this module (1–7). Outputs of the last module to run are always published. See [partial execution](#partial-execution) |
-| `full_output` | `false` | Publish outputs from all modules, not just the last one |
+| `stop_at_module` | `6` | Stop the pipeline after this module (1–6). Outputs of the last module to run are always published. See [partial execution](#partial-execution) |
+| `full_output` | `true` | Publish intermediate outputs from all modules, not just the last one |
+| `skip_tax_annot` | `false` | Skip module 4 (taxonomic annotation); module 6 will still run without taxonomy input |
+| `skip_fun_annot` | `false` | Skip module 5 (functional annotation); module 6 will still run without functional input |
+| `maxForks` | `3` | Maximum number of parallel sample processes |
 
 ### Module 1–2 parameters
 
@@ -151,7 +150,7 @@ All parameters can be set in `nextflow.config` or passed on the command line wit
 | `min_seq` | `5` | Minimum number of assembled contigs required to continue |
 | `train_file_name` | `illumina_1` | FragGeneScanRs training model |
 
-### Module 3–4 parameters
+### Module 3 parameters
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -159,7 +158,7 @@ All parameters can be set in `nextflow.config` or passed on the command line wit
 | `clust_thres` | `0.7` | MMseqs2 sequence identity threshold for clustering |
 | `clust_cov_len` | `0.85` | Minimum fraction of aligned residues for clustering (`-c` in MMseqs2) |
 
-### Module 5 parameters (taxonomic annotation)
+### Module 4 parameters (taxonomic annotation)
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -168,7 +167,7 @@ All parameters can be set in `nextflow.config` or passed on the command line wit
 | `sensitivity` | `4.0` | MMseqs2 search sensitivity (`-s`) |
 | `tax_lineage` | `1` | Include full taxonomic lineage in output (1 = yes, 0 = no) |
 
-### Module 6 parameters (functional annotation)
+### Module 5 parameters (functional annotation)
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -187,20 +186,17 @@ nextflow run main.nf --stop_at_module 1
 # Run through ORF prediction (modules 1–2)
 nextflow run main.nf --stop_at_module 2
 
-# Run through ORF filtering and MMseqs2 DB creation (modules 1–3)
+# Run through ORF filtering, DB creation, and clustering (modules 1–3)
 nextflow run main.nf --stop_at_module 3
 
-# Run through ORF clustering and abundance tables (modules 1–4, default)
-nextflow run main.nf
+# Run through taxonomic annotation (modules 1–4)
+nextflow run main.nf --stop_at_module 4
 
-# Run through taxonomic annotation (modules 1–5)
+# Run through functional annotation (modules 1–5)
 nextflow run main.nf --stop_at_module 5
 
-# Run through functional annotation (modules 1–6)
-nextflow run main.nf --stop_at_module 6
-
-# Run the full pipeline including table merging (modules 1–7)
-nextflow run main.nf --stop_at_module 7
+# Run the full pipeline including table integration (modules 1–6, default)
+nextflow run main.nf
 ```
 
 The outputs of the last module to run are always published to `--output_dir`. Intermediate module outputs (from earlier modules) are only published when `--full_output true` is set:
@@ -208,6 +204,16 @@ The outputs of the last module to run are always published to `--output_dir`. In
 ```bash
 # Run through module 2 and publish outputs from both modules 1 and 2
 nextflow run main.nf --stop_at_module 2 --full_output true
+```
+
+Taxonomic and functional annotation can be skipped independently without stopping the pipeline early:
+
+```bash
+# Run full pipeline but skip taxonomic annotation
+nextflow run main.nf --skip_tax_annot true
+
+# Run full pipeline but skip functional annotation
+nextflow run main.nf --skip_fun_annot true
 ```
 
 ---
@@ -296,49 +302,14 @@ mg-clust-module-2.py \
 
 > Stop after this module with `--stop_at_module 3`.
 
-Concatenation of per-sample ORFs, length filtering, and MMseqs2 database creation. Runs once across all samples.
+Concatenation of per-sample ORFs, length filtering, MMseqs2 database creation, and ORF clustering. Runs once across all samples.
 
 ```bash
 mg-clust-module-3.py \
     --orf_files      <sample1_orfs.faa> <sample2_orfs.faa> ... \
-    --meancov_files  <sample1_meancov.tsv> <sample2_meancov.tsv> ... \
-    --readscov_files <sample1_readscov.tsv> <sample2_readscov.tsv> ... \
     --output_dir     <output_dir> \
     --nslots         4 \
     --min_orf_length 60 \
-    [--overwrite]
-```
-
-| Parameter | Default | Description |
-|---|---|---|
-| `--orf_files` | — | Per-sample ORF FASTA files (required) |
-| `--meancov_files` | — | Per-sample mean coverage TSV files (required) |
-| `--readscov_files` | — | Per-sample read count TSV files (required) |
-| `--output_dir` | — | Output directory (required) |
-| `--min_orf_length` | `60` | Minimum ORF length in amino acids; shorter ORFs are discarded |
-| `--nslots` | `4` | Threads |
-| `--overwrite` | `false` | Overwrite output directory if it exists |
-
-**Outputs:**
-- `orfs_filt_db*` — MMseqs2 database of filtered ORFs (multiple files sharing the prefix)
-- `orfs_meancov.tsv` — merged mean coverage table (columns: `sample_name`, `orf_id`, `mean_coverage`)
-- `orfs_readscov.tsv` — merged read count table (columns: `sample_name`, `orf_id`, `read_count`)
-
----
-
-## mg-clust-module-4.py
-
-> Stop after this module with `--stop_at_module 4` (default).
-
-ORF clustering with MMseqs2 and generation of per-OPU abundance tables. Runs once.
-
-```bash
-mg-clust-module-4.py \
-    --orfs_db        orfs_filt_db \
-    --meancov_table  <orfs_meancov.tsv> \
-    --readscov_table <orfs_readscov.tsv> \
-    --output_dir     <output_dir> \
-    --nslots         4 \
     --clust_thres    0.7 \
     --clust_cov_len  0.85 \
     [--overwrite]
@@ -346,37 +317,32 @@ mg-clust-module-4.py \
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--orfs_db` | — | MMseqs2 database prefix (required) |
-| `--meancov_table` | — | Merged mean coverage table from module 3 (required) |
-| `--readscov_table` | — | Merged read count table from module 3 (required) |
+| `--orf_files` | — | Per-sample ORF FASTA files (required) |
 | `--output_dir` | — | Output directory (required) |
+| `--min_orf_length` | `60` | Minimum ORF length in amino acids; shorter ORFs are discarded |
 | `--clust_thres` | `0.7` | Sequence identity threshold for MMseqs2 clustering |
 | `--clust_cov_len` | `0.85` | Minimum fraction of aligned residues (`-c` in MMseqs2) |
 | `--nslots` | `4` | Threads |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
-**Outputs (inside `clust_orfs_id<N>perc/`):**
-- `orfs_clust_id<N>perc.tsv` — cluster membership table (columns: `cluster_id`, `orf_id`)
-- `orfs_clust_id<N>perc2meancov.tsv` — per-ORF mean coverage mapped to cluster IDs
-- `orfs_clust_id<N>perc2readscov.tsv` — per-ORF read counts mapped to cluster IDs
-- `orfs_clust_id<N>perc_not_found.list` — ORFs present in coverage tables but absent from clusters
-
-**Outputs (in root output directory):**
-- `orfs_clust_id<N>perc_meancov_workable.tsv` — mean coverage summed per cluster per sample (columns: `sample_name`, `clust_id`, `abund`)
-- `orfs_clust_id<N>perc_readscov_workable.tsv` — read counts summed per cluster per sample (columns: `sample_name`, `clust_id`, `abund`)
+**Outputs:**
+- `orfs.faa` — concatenated ORF protein sequences (all samples)
+- `orfs_filt-minlen<N>aa.faa` — length-filtered ORF protein sequences
+- `orfs_filt_db-minlen<N>aa/` — MMseqs2 database of filtered ORFs
+- `orfs_clust-minlen<N>aa-id<N>perc/orfs_clust-minlen<N>aa-id<N>perc.tsv` — cluster membership table (columns: `cluster_representative`, `orf_id`)
 
 ---
 
-## mg-clust-module-5.py
+## mg-clust-module-4.py
 
-> Stop after this module with `--stop_at_module 5`. Runs in parallel per sample.
+> Stop after this module with `--stop_at_module 4`. Runs in parallel per sample.
 
 Taxonomic annotation of assembled contigs against the GTDB database using MMseqs2 taxonomy. Also maps contig-level taxonomy to ORF IDs via the BED file from module 2.
 
 If the GTDB database is absent at `--gtdb`, it is downloaded automatically via `mmseqs databases GTDB`.
 
 ```bash
-mg-clust-module-5.py \
+mg-clust-module-4.py \
     --contigs       <contigs.fa> \
     --bed_file      <sample_orfs.bed> \
     --sample_name   <sample> \
@@ -405,20 +371,20 @@ mg-clust-module-5.py \
 **Outputs (inside `<sample_name>/`):**
 - `<sample_name>_contig_tax_annot.tsv` — per-contig taxonomy (columns: `contig_id`, `taxid`, `rank`, `name`, `lineage`)
 - `<sample_name>_contig_tax_report.txt` — Kraken-style taxonomy report
-- `<sample_name>_orf_tax_annot_workable.tsv` — per-ORF taxonomy via left join on BED file (columns: `sample_name`, `orf_id`, `taxid`, `rank`, `name`, `lineage`)
+- `<sample_name>_orf_tax_annot.tsv` — per-ORF taxonomy via left join on BED file (columns: `orf_id`, `taxid`, `rank`, `name`, `lineage`)
 
 ---
 
-## mg-clust-module-6.py
+## mg-clust-module-5.py
 
-> Stop after this module with `--stop_at_module 6`. Runs in parallel per sample.
+> Stop after this module with `--stop_at_module 5`. Runs in parallel per sample.
 
 Functional annotation of predicted ORF protein sequences against KEGG KO HMM profiles using pyHMMER. Outputs the best-scoring KO hit per ORF.
 
 If the KO profile database is absent at `--hmm_db`, it is downloaded automatically from the KEGG FTP.
 
 ```bash
-mg-clust-module-6.py \
+mg-clust-module-5.py \
     --orfs_faa      <sample_orfs.faa> \
     --sample_name   <sample> \
     --output_dir    <output_dir> \
@@ -442,41 +408,48 @@ mg-clust-module-6.py \
 
 **Outputs (inside `<sample_name>/`):**
 - `orfs_ko_domtblout.txt` — raw pyHMMER domain table
-- `<sample_name>_orf_fun_annot_workable.tsv` — best-hit KO annotation per ORF (columns: `sample_name`, `orf_id`, `ko_id`, `score`, `evalue`)
+- `<sample_name>_orf_fun_annot.tsv` — best-hit KO annotation per ORF (columns: `orf_id`, `ko_id`, `score`, `evalue`)
 
 ---
 
-## mg-clust-module-7.py
+## mg-clust-module-6.py
 
-> Stop after this module with `--stop_at_module 7`. Runs once after all samples complete.
+> Stop after this module with `--stop_at_module 6` (default). Runs once after all samples complete.
 
-Concatenates the per-sample taxonomy and function annotation files across all samples, then merges them with the per-OPU abundance tables from module 4 using DuckDB. The join key is the cluster representative ORF ID (`clust_id = orf_id`), so each cluster is annotated with the taxonomy and function of its representative sequence.
+Concatenates per-sample coverage, taxonomy, and functional annotation tables across all samples, then joins them with the cluster membership table from module 3 using DuckDB to produce per-OPU abundance tables annotated with taxonomy and function.
 
 ```bash
-mg-clust-module-7.py \
-    --tax_files      <s1_orf_tax_annot_workable.tsv> <s2_...> ... \
-    --fun_files      <s1_orf_fun_annot_workable.tsv> <s2_...> ... \
-    --meancov_table  <orfs_clust_id70perc_meancov_workable.tsv> \
-    --readscov_table <orfs_clust_id70perc_readscov_workable.tsv> \
-    --output_dir     <output_dir> \
-    --clust_thres    0.7 \
+mg-clust-module-6.py \
+    --meancov_files   <s1_orfs_meancov.tsv> <s2_...> ... \
+    --readscov_files  <s1_orfs_readscov.tsv> <s2_...> ... \
+    --clust_tsv       <orfs_clust-minlen60aa-id70perc.tsv> \
+    [--tax_annot_files <s1_orf_tax_annot.tsv> <s2_...> ...] \
+    [--fun_annot_files <s1_orf_fun_annot.tsv> <s2_...> ...] \
+    --clust_thres     0.7 \
+    --output_dir      <output_dir> \
     [--overwrite]
 ```
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--tax_files` | — | Per-sample taxonomy workable TSVs from module 5 (required) |
-| `--fun_files` | — | Per-sample function workable TSVs from module 6 (required) |
-| `--meancov_table` | — | Mean coverage workable table from module 4 (required) |
-| `--readscov_table` | — | Reads coverage workable table from module 4 (required) |
-| `--clust_thres` | `0.7` | Clustering threshold used in module 4; used to name the output file |
+| `--meancov_files` | — | Per-sample mean coverage TSV files from module 2 (required) |
+| `--readscov_files` | — | Per-sample read count TSV files from module 2 (required) |
+| `--clust_tsv` | — | Cluster membership TSV from module 3 (required) |
+| `--tax_annot_files` | omitted | Per-sample taxonomy TSVs from module 4; omit when `--skip_tax_annot true` |
+| `--fun_annot_files` | omitted | Per-sample function TSVs from module 5; omit when `--skip_fun_annot true` |
+| `--clust_thres` | `0.7` | Clustering threshold used in module 3; used to name the output file |
 | `--output_dir` | — | Output directory (required) |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
-**Outputs:**
-- `orf_tax_annot_workable.tsv` — concatenated taxonomy annotations across all samples
-- `orf_fun_annot_workable.tsv` — concatenated function annotations across all samples
-- `orfs_clust_id<N>perc_cov2taxa2fun_workable.tsv` — integrated table (columns: `sample_name`, `clust_id`, `meancov`, `readscov`, `taxid`, `rank`, `name`, `lineage`, `ko_id`, `fun_score`, `fun_evalue`)
+**Outputs (always produced):**
+- `orfs_meancov.tsv` — concatenated mean coverage table across all samples
+- `orfs_readscov.tsv` — concatenated read count table across all samples
+- `orfs_clust-minlen<N>aa-id<N>perc-coverage.tsv` — per-ORF coverage joined with cluster membership
+- `orfs_clust-minlen<N>aa-id<N>perc-collapsed_coverage.tsv` — coverage summed per OPU per sample (the primary abundance table)
+
+**Outputs (conditional):**
+- `contigs_tax_annot.tsv` — concatenated taxonomy annotations across all samples (only when `--skip_tax_annot` is not set)
+- `orfs_fun_annot.tsv` — concatenated functional annotations across all samples (only when `--skip_fun_annot` is not set)
 
 ---
 
@@ -484,42 +457,42 @@ mg-clust-module-7.py \
 
 ```
 <output_dir>/
-    module1/
-        <sample_name>/
-            assembly/<sample_name>.contigs.fa
-            <sample_name>_sorted.bam
-    module2/
-        <sample_name>/
-            <sample_name>_orfs.faa
-            <sample_name>_orfs.bed
-            <sample_name>_orfs_meancov.tsv
-            <sample_name>_orfs_readscov.tsv
-    module3/
-        orfs_filt_db*
-        orfs_meancov.tsv
-        orfs_readscov.tsv
-    module4/
-        clust_orfs_id70perc/
-            orfs_clust_id70perc.tsv
-            orfs_clust_id70perc2meancov.tsv
-            orfs_clust_id70perc2readscov.tsv
-            orfs_clust_id70perc_not_found.list
-        orfs_clust_id70perc_meancov_workable.tsv
-        orfs_clust_id70perc_readscov_workable.tsv
-    module5/
-        <sample_name>/
-            <sample_name>_contig_tax_annot.tsv
-            <sample_name>_contig_tax_report.txt
-            <sample_name>_orf_tax_annot_workable.tsv
-    module6/
-        <sample_name>/
-            orfs_ko_domtblout.txt
-            <sample_name>_orf_fun_annot_workable.tsv
-    module7/
-        orf_tax_annot_workable.tsv
-        orf_fun_annot_workable.tsv
-        orfs_clust_id70perc_cov2taxa2fun_workable.tsv
+    intermediate/
+        module-1/
+            <sample_name>/
+                assembly/<sample_name>.contigs.fa
+                <sample_name>_sorted.bam
+        module-2/
+            <sample_name>/
+                <sample_name>_orfs.faa
+                <sample_name>_orfs.bed
+                <sample_name>_orfs_meancov.tsv
+                <sample_name>_orfs_readscov.tsv
+        module-3/
+            orfs.faa
+            orfs_filt-minlen60aa.faa
+            orfs_filt_db-minlen60aa/
+            orfs_clust-minlen60aa-id70perc/
+                orfs_clust-minlen60aa-id70perc.tsv
+        module-4/
+            <sample_name>/
+                <sample_name>_contig_tax_annot.tsv
+                <sample_name>_contig_tax_report.txt
+                <sample_name>_orf_tax_annot.tsv
+        module-5/
+            <sample_name>/
+                orfs_ko_domtblout.txt
+                <sample_name>_orf_fun_annot.tsv
+        module-6/
+            orfs_meancov.tsv
+            orfs_readscov.tsv
+            contigs_tax_annot.tsv              # only when skip_tax_annot=false
+            orfs_fun_annot.tsv                 # only when skip_fun_annot=false
+            orfs_clust-minlen60aa-id70perc-coverage.tsv
+            orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv
 ```
+
+> **Note:** Intermediate module outputs (modules 1–5) are only written when `--full_output true`. The final module output is always published.
 
 ---
 
@@ -556,36 +529,28 @@ mg-clust-module-7.py \
 |---|---|---|
 | Python | >= 3.8 | Script runtime |
 | [BBTools](https://jgi.doe.gov/data-and-tools/software-tools/bbtools) | 37.62 | ORF length filtering (bbduk) |
-| [MMseqs2](https://github.com/soedinglab/MMseqs2) | 18.8cc5c | Sequence database creation |
+| [MMseqs2](https://github.com/soedinglab/MMseqs2) | 18.8cc5c | Sequence database creation and clustering |
 
 ## Module 4
-
-| Dependency | Version | Purpose |
-|---|---|---|
-| Python | >= 3.8 | Script runtime |
-| [pandas](https://pandas.pydata.org) | 3.0.1 | Abundance table processing |
-| [MMseqs2](https://github.com/soedinglab/MMseqs2) | 18.8cc5c | ORF clustering |
-
-## Module 5
 
 | Dependency | Version | Purpose |
 |---|---|---|
 | Python | >= 3.10 | Script runtime |
 | [MMseqs2](https://github.com/soedinglab/MMseqs2) | >= 15 | Taxonomy search against GTDB |
 
-## Module 6
+## Module 5
 
 | Dependency | Version | Purpose |
 |---|---|---|
 | Python | >= 3.13 | Script runtime |
 | [pyHMMER](https://pyhmmer.readthedocs.io) | >= 0.10 | HMM search against KO profiles |
 
-## Module 7
+## Module 6
 
 | Dependency | Version | Purpose |
 |---|---|---|
 | Python | >= 3.10 | Script runtime |
-| [DuckDB](https://duckdb.org) | >= 1.0 | In-process SQL merge of annotation and abundance tables |
+| [DuckDB](https://duckdb.org) | >= 1.0 | In-process SQL merge of coverage, taxonomy, and function tables |
 
 ---
 

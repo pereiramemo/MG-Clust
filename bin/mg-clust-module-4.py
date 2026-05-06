@@ -249,42 +249,8 @@ def main() -> None:
         print("mmseqs taxonomyreport failed", file=sys.stderr)
         sys.exit(1)
 
-    ###########################################################################
-    # 3.9. Map ORF IDs to contig-level taxonomy
-    ###########################################################################
-
-    # mmseqs createtsv output columns (0-indexed): contig_id, taxid, rank, name[, lineage]
-    tax_map = {}
-    try:
-        with open(tax_tsv, "r", encoding="utf-8") as fh:
-            for line in fh:
-                parts = line.rstrip("\n").split("\t")
-                if parts:
-                    tax_map[parts[0]] = parts[1:]  # contig_id -> [taxid, rank, name, ...]
-    except Exception as exc:
-        print(f"reading taxonomy TSV failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    orf_tax_tsv = os.path.join(args.output_dir, f"{args.sample_name}_orf_tax_annot.tsv")
-
-    try:
-        with open(args.bed_file, "r", encoding="utf-8") as bed_fh, \
-             open(orf_tax_tsv, "w", encoding="utf-8") as out_fh:
-            for line in bed_fh:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 4:
-                    continue
-                contig_id = parts[0]
-                orf_id    = parts[4]
-                # Left join: fill with empty strings when contig has no taxonomy hit
-                tax_fields = (tax_map.get(contig_id, "NA"))
-                out_fh.write(f"{orf_id}\t" + "\t".join(tax_fields) + "\n")
-    except Exception as exc:
-        print(f"mapping ORFs to taxonomy failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
     ########################################################################### 
-    # 3.10. Write output log and exit
+    # 3.9. Write output log and exit
     ###########################################################################
     
     print(f"{os.path.basename(__file__)} exited successfully")

@@ -47,11 +47,11 @@ def parse_args() -> argparse.Namespace:
         help="list of per-sample read coverage tables (*_orfs_readscov.tsv)",
     )
 
-    parser.add_argument("--tax_annot_files", dest="tax_annot_files", required=True, nargs="+",
+    parser.add_argument("--tax_annot_files", dest="tax_annot_files", required=False, nargs="*",
         help="list of per-sample taxonomy annotation files (*_orf_tax_annot.tsv)",
     )
 
-    parser.add_argument("--fun_annot_files", dest="fun_annot_files", required=True, nargs="+",
+    parser.add_argument("--fun_annot_files", dest="fun_annot_files", required=False, nargs="*",
         help="list of per-sample functional annotation files (*_orf_fun_annot.tsv)",
     )
 
@@ -78,7 +78,6 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
-
 ###############################################################################
 # 2.2 Concatenate table files
 ###############################################################################
@@ -101,10 +100,8 @@ def concat_tables(input_files: list[str], output_file: str) -> None:
 
 def build_unified_table(
     clust_tsv: str,
-    meancov_tsv: str,
-    readscov_tsv: str,
- #   tax_annot_tsv: str,
-    fun_annot_tsv: str,
+    meancov_concat: str,
+    readscov_concat: str,
     output1_tsv: str,
 ) -> None:
     
@@ -112,12 +109,6 @@ def build_unified_table(
                  'orf_id':'VARCHAR','coverage':'DOUBLE', 'sample_name':'VARCHAR'}"
     
     clust_cols = "{'opu_id':'VARCHAR','orf_id':'VARCHAR'}"
-
-#    tax_cols = "{'orf_id':'VARCHAR','tax_id':'VARCHAR', 'tax_rank':'VARCHAR', 'tax_name':'VARCHAR', \
-#                 'retained_fragments':'BIGINT', 'total_fragments':'BIGINT', 'agreed_fragments':'BIGINT', \
-#                 'support':'DOUBLE', 'tax_lineage':'VARCHAR'}"
-    
-    fun_cols = "{'orf_id':'VARCHAR','fun_id':'VARCHAR','score':'DOUBLE', 'evalue':'DOUBLE'}"
 
     sql = f"""
         COPY (
@@ -127,15 +118,12 @@ def build_unified_table(
                 c.orf_id,
                 COALESCE(r.coverage, 0.0) AS read_coverage,
                 COALESCE(m.coverage, 0.0) AS mean_coverage,
-                f.fun_id
             FROM read_csv('{clust_tsv}', delim='\t', header=false,
                           columns={clust_cols}) AS c
-            LEFT JOIN read_csv('{readscov_tsv}', delim='\t', header=false,
+            LEFT JOIN read_csv('{readscov_concat}', delim='\t', header=false,
                                columns={cov_cols}) AS r ON c.orf_id = r.orf_id
-            LEFT JOIN read_csv('{meancov_tsv}', delim='\t', header=false,
+            LEFT JOIN read_csv('{meancov_concat}', delim='\t', header=false,
                                columns={cov_cols}) AS m ON c.orf_id = m.orf_id
-            LEFT JOIN read_csv('{fun_annot_tsv}', delim='\t', header=false,
-                               columns={fun_cols}) AS f ON c.orf_id = f.orf_id
         ) TO '{output1_tsv}' (HEADER true, DELIMITER '\t')
     """
     try:
@@ -153,7 +141,7 @@ def build_collapsed_table(
     output2_tsv: str,
 ) -> None:
     output1_cols = "{'sample_name':'VARCHAR','opu_id':'VARCHAR','orf_id':'VARCHAR', \
-                    'read_coverage':'DOUBLE','mean_coverage':'DOUBLE','fun_id':'VARCHAR'}"
+                    'read_coverage':'DOUBLE','mean_coverage':'DOUBLE'}"
 
     sql = f"""
         COPY (
@@ -228,38 +216,38 @@ def main() -> None:
     ###########################################################################
     # 3.5. Concatenate annot files
     ###########################################################################
+    
+    if args.tax_annot_files:
+        tax_annot_concat = os.path.join(args.output_dir, "contigs_tax_annot.tsv")
+        concat_tables(args.tax_annot_files, tax_annot_concat)
 
-    tax_annot_concat = os.path.join(args.output_dir, "orf_tax_annot.tsv")
-    fun_annot_concat = os.path.join(args.output_dir, "orf_fun_annot.tsv")
-
-    concat_tables(args.tax_annot_files, tax_annot_concat)
-    concat_tables(args.fun_annot_files, fun_annot_concat)
+    if args.fun_annot_files:
+        fun_annot_concat = os.path.join(args.output_dir, "orfs_fun_annot.tsv")
+        concat_tables(args.fun_annot_files, fun_annot_concat)
 
     ###########################################################################
     # 3.5. Build unified OPU-ORF coverage table
     ###########################################################################
 
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
-    output_table1 = os.path.join(
+    output1_tsv = os.path.join(
         args.output_dir,
         f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc-coverage.tsv",
     )
 
-    build_unified_table(args.clust_tsv, meancov_concat, readscov_concat, 
-                        fun_annot_concat, 
-                        output_table1)
+    build_unified_table(args.clust_tsv, meancov_concat, 
+                        readscov_concat, output1_tsv)
 
     ###########################################################################
     # 3.6. Build collapsed by sample and OPU ID coverage table
     ###########################################################################
 
-    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
-    output_table2 = os.path.join(
+    output2_tsv = os.path.join(
         args.output_dir,
         f"orfs_clust-minlen{args.min_orf_length}aa-id{clust_thres_str}perc-collapsed_coverage.tsv",
     )
 
-    build_collapsed_table(output_table1, output_table2)
+    build_collapsed_table(output1_tsv, output2_tsv)
 
     ########################################################################### 
     # 3.7. Write output log and exit
@@ -267,7 +255,6 @@ def main() -> None:
     
     print(f"{os.path.basename(__file__)} exited successfully")
     sys.exit(0)
-
 
 ###############################################################################
 # 4. Run the main function

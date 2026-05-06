@@ -228,7 +228,7 @@ def main() -> None:
     # 3.6. Write best-hit annotation table
     ###########################################################################
 
-    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orf_fun_annot.tsv")
+    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orfs_fun_annot.tsv")
 
     try:
         write_best_hits(domtblout, annotation_table)

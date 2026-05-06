@@ -57,13 +57,13 @@ workflow {
 
     // MODULE6: Build unified OPU-ORF coverage table
     if (stop >= 6) {
-        meancov_files  = module2_out.meancov.map { _sn, path -> path }.collect()
-        readscov_files = module2_out.readscov.map { _sn, path -> path }.collect()
-        tax_annot_files = module4_out.tax_annot.collect()
-        fun_annot_files = module5_out.fun_annot.collect()
-        clust_tsv      = module3_out.clust_tsv
-        module6_out    = MODULE6(meancov_files, readscov_files, clust_tsv,
-                                 tax_annot_files, fun_annot_files)
+        meancov_files   = module2_out.meancov.map { _sn, path -> path }.collect()
+        readscov_files  = module2_out.readscov.map { _sn, path -> path }.collect()
+        tax_annot_files = params.skip_tax_annot ? Channel.value([]) : module4_out.tax_annot.collect()
+        fun_annot_files = params.skip_fun_annot ? Channel.value([]) : module5_out.fun_annot.collect()
+        clust_tsv       = module3_out.clust_tsv
+        module6_out     = MODULE6(meancov_files, readscov_files, clust_tsv,
+                                tax_annot_files, fun_annot_files)
     }
 
 }

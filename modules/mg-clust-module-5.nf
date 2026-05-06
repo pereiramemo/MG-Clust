@@ -17,7 +17,7 @@ process MODULE5 {
     tuple val(sample_name), path(orfs_faa)
 
     output:
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orf_fun_annot.tsv"),   emit: fun_annot
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_fun_annot.tsv"),   emit: fun_annot
 
     script:
     """

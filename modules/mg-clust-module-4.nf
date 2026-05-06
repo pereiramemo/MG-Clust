@@ -18,7 +18,7 @@ process MODULE4 {
     tuple val(sample_name), path(assembly), path(orf_bed)
 
     output:
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orf_tax_annot.tsv"),    emit: tax_annot
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_contig_tax_annot.tsv"),    emit: tax_annot
 
     script:
     """
