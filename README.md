@@ -125,55 +125,48 @@ data/reads/
 
 ## Parameters
 
-All parameters can be set in `nextflow.config` or passed on the command line with `--param value`.
+All parameters can be set in `nextflow.config` or overridden on the command line with `--param value`. Run `nextflow run main.nf --help` to print the full reference:
 
-### Core parameters
+```
+Mg-Clust: Operational Protein Units from metagenomic paired-end reads
 
-| Parameter | Default | Description |
-|---|---|---|
-| `input_dir` | `./test/data` | Directory containing input paired-end reads |
-| `output_dir` | `./test/mg-clust-output` | Directory where all module outputs are published |
-| `reads_pattern` | `*_R{1,2}*.fastq` | Glob pattern used to match paired-end read files |
-| `nslots` | `16` | Number of threads per process |
-| `stop_at_module` | `6` | Stop the pipeline after this module (1–6). Outputs of the last module to run are always published. See [partial execution](#partial-execution) |
-| `full_output` | `true` | Publish intermediate outputs from all modules, not just the last one |
-| `skip_tax_annot` | `false` | Skip module 4 (taxonomic annotation); module 6 will still run without taxonomy input |
-| `skip_fun_annot` | `false` | Skip module 5 (functional annotation); module 6 will still run without functional input |
-| `maxForks` | `3` | Maximum number of parallel sample processes |
+Usage: nextflow run main.nf [options]
 
-### Module 1–2 parameters
+General:
+  --input_dir       DIR   Input directory with paired-end FASTQ files (default: ./test/data)
+  --reads_pattern   STR   Glob pattern for fromFilePairs (default: *_R{1,2}*.fastq)
+  --output_dir      DIR   Output directory (default: ./test/mg-clust-output/)
+  --nslots          INT   CPU threads per tool (default: 16)
+  --stop_at_module  INT   Stop after module N, 1-6 (default: 6)
+  --full_output     BOOL  Publish all intermediate outputs (default: true)
+  --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: false)
+  --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: false)
+  --maxForks        INT   Max parallel process instances (default: 3)
 
-| Parameter | Default | Description |
-|---|---|---|
-| `assem_preset` | `meta-sensitive` | MEGAHIT assembly preset |
-| `min_contig_len` | `250` | Minimum contig length (bp); shorter contigs are discarded |
-| `min_seq` | `5` | Minimum number of assembled contigs required to continue |
-| `train_file_name` | `illumina_1` | FragGeneScanRs training model |
+MODULE1 — Assembly:
+  --assem_preset    STR   MEGAHIT preset (default: meta-sensitive)
+  --min_contig_len  INT   Minimum contig length in bp (default: 250)
+  --min_seq         INT   Minimum reads required to assemble (default: 5)
 
-### Module 3 parameters
+MODULE2 — ORF prediction:
+  --train_file_name STR   Prodigal training file name (default: illumina_1)
 
-| Parameter | Default | Description |
-|---|---|---|
-| `min_orf_length` | `60` | Minimum ORF length (amino acids); shorter ORFs are discarded |
-| `clust_thres` | `0.7` | MMseqs2 sequence identity threshold for clustering |
-| `clust_cov_len` | `0.85` | Minimum fraction of aligned residues for clustering (`-c` in MMseqs2) |
+MODULE3 — ORF clustering:
+  --min_orf_len     INT   Minimum ORF length in aa (default: 60)
+  --clust_thres     NUM   MMseqs2 identity threshold 0-1 (default: 0.7)
+  --clust_cov_len   NUM   MMseqs2 coverage threshold 0-1 (default: 0.85)
 
-### Module 4 parameters (taxonomic annotation)
+MODULE4 — Taxonomic annotation (GTDB):
+  --gtdb            PATH  MMseqs2 GTDB database prefix (default: ~/.mg-clust/db/gtdb/gtdb)
+  --lca_mode        INT   MMseqs2 LCA mode (default: 3)
+  --sensitivity     NUM   MMseqs2 sensitivity (default: 4.0)
+  --tax_lineage     INT   MMseqs2 --tax-lineage flag (default: 1)
 
-| Parameter | Default | Description |
-|---|---|---|
-| `gtdb` | `~/.mg-clust/db/gtdb/gtdb` | Path to the MMseqs2 GTDB taxonomy database prefix |
-| `lca_mode` | `3` | MMseqs2 LCA mode: 1 = single-hit, 2 = LCA of best hits, 3 = top-hit with LCA fallback |
-| `sensitivity` | `4.0` | MMseqs2 search sensitivity (`-s`) |
-| `tax_lineage` | `1` | Include full taxonomic lineage in output (1 = yes, 0 = no) |
-
-### Module 5 parameters (functional annotation)
-
-| Parameter | Default | Description |
-|---|---|---|
-| `hmm_db` | `~/.mg-clust/db/ko/ko_profiles.hmm` | Path to the KO HMM profile database |
-| `evalue_thres` | `1e-3` | E-value threshold for pyHMMER (used as fallback when `cut_ga` is enabled) |
-| `cut_ga` | `false` | Use per-model gathering thresholds (`--cut_ga`); recommended when available |
+MODULE5 — Functional annotation (KO HMMs):
+  --hmm_db          PATH  KO HMM profiles file (default: ~/.mg-clust/db/ko/ko_profiles.hmm)
+  --evalue_thres    NUM   E-value threshold (default: 1e-3)
+  --cut_ga          BOOL  Use per-profile GA cutoffs (default: false)
+```
 
 ## Partial execution
 
@@ -309,7 +302,7 @@ mg-clust-module-3.py \
     --orf_files      <sample1_orfs.faa> <sample2_orfs.faa> ... \
     --output_dir     <output_dir> \
     --nslots         4 \
-    --min_orf_length 60 \
+    --min_orf_len    60 \
     --clust_thres    0.7 \
     --clust_cov_len  0.85 \
     [--overwrite]
@@ -319,7 +312,7 @@ mg-clust-module-3.py \
 |---|---|---|
 | `--orf_files` | — | Per-sample ORF FASTA files (required) |
 | `--output_dir` | — | Output directory (required) |
-| `--min_orf_length` | `60` | Minimum ORF length in amino acids; shorter ORFs are discarded |
+| `--min_orf_len` | `60` | Minimum ORF length in amino acids; shorter ORFs are discarded |
 | `--clust_thres` | `0.7` | Sequence identity threshold for MMseqs2 clustering |
 | `--clust_cov_len` | `0.85` | Minimum fraction of aligned residues (`-c` in MMseqs2) |
 | `--nslots` | `4` | Threads |
@@ -455,6 +448,11 @@ mg-clust-module-6.py \
 
 ## Output directory structure
 
+The pipeline writes to two top-level directories inside `--output_dir`:
+
+- **`intermediate/`** — full outputs from each module, organised by module number. Modules 1–5 are only written here when `--full_output true` is set; module 6 is always written.
+- **`workables/`** — a flat directory of symlinks pointing into `intermediate/module-6/`. These are the primary result files intended for downstream analysis. Because they are relative symlinks, the entire `output_dir` can be moved or archived (e.g. with `rsync -a` or `tar`) while keeping the links intact.
+
 ```
 <output_dir>/
     intermediate/
@@ -482,17 +480,20 @@ mg-clust-module-6.py \
         module-5/
             <sample_name>/
                 orfs_ko_domtblout.txt
-                <sample_name>_orf_fun_annot.tsv
+                <sample_name>_orfs-minlen60aa-fun_annot.tsv
         module-6/
             orfs_meancov.tsv
             orfs_readscov.tsv
-            contigs_tax_annot.tsv              # only when skip_tax_annot=false
-            orfs_fun_annot.tsv                 # only when skip_fun_annot=false
+            contigs_tax_annot.tsv                              # only when skip_tax_annot=false
+            orfs_fun_annot.tsv                                 # only when skip_fun_annot=false
             orfs_clust-minlen60aa-id70perc-coverage.tsv
             orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv
+    workables/
+        orfs_clust-minlen60aa-id70perc-coverage.tsv           -> ../intermediate/module-6/...
+        orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv -> ../intermediate/module-6/...
+        contigs_tax_annot.tsv                                  -> ../intermediate/module-6/...  # only when skip_tax_annot=false
+        orfs_fun_annot.tsv                                     -> ../intermediate/module-6/...  # only when skip_fun_annot=false
 ```
-
-> **Note:** Intermediate module outputs (modules 1–5) are only written when `--full_output true`. The final module output is always published.
 
 ---
 
