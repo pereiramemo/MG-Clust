@@ -442,7 +442,7 @@ mg-clust-module-6.py \
 
 **Outputs (conditional):**
 - `contigs_tax_annot.tsv` — concatenated taxonomy annotations across all samples (only when `--skip_tax_annot` is not set)
-- `orfs_fun_annot.tsv` — concatenated functional annotations across all samples (only when `--skip_fun_annot` is not set)
+- `orfs-minlen<N>aa-fun_annot.tsv` — concatenated functional annotations across all samples (only when `--skip_fun_annot` is not set)
 
 ---
 
@@ -452,6 +452,8 @@ The pipeline writes to two top-level directories inside `--output_dir`:
 
 - **`intermediate/`** — full outputs from each module, organised by module number. Modules 1–5 are only written here when `--full_output true` is set; module 6 is always written.
 - **`workables/`** — a flat directory of symlinks pointing into `intermediate/module-6/`. These are the primary result files intended for downstream analysis. Because they are relative symlinks, the entire `output_dir` can be moved or archived (e.g. with `rsync -a` or `tar`) while keeping the links intact.
+
+Two key parameters — minimum ORF length (`--min_orf_len`) and clustering identity threshold (`--clust_thres`) — are encoded directly into the names of output files and directories (e.g. `orfs_clust-minlen60aa-id70perc/`). This design ensures that re-running the pipeline with different values of these parameters does not overwrite existing results. Combined with Nextflow's `-resume` flag, which reuses cached task outputs for any upstream steps whose inputs have not changed, this allows parameter space exploration (e.g. sweeping clustering thresholds) at minimal computational cost: only modules 3 and 6 are re-executed, while the computationally intensive assembly, ORF prediction, and annotation steps remain cached.
 
 ```
 <output_dir>/
@@ -485,14 +487,14 @@ The pipeline writes to two top-level directories inside `--output_dir`:
             orfs_meancov.tsv
             orfs_readscov.tsv
             contigs_tax_annot.tsv                              # only when skip_tax_annot=false
-            orfs_fun_annot.tsv                                 # only when skip_fun_annot=false
+            orfs-minlen60aa-fun_annot.tsv                      # only when skip_fun_annot=false
             orfs_clust-minlen60aa-id70perc-coverage.tsv
             orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv
     workables/
         orfs_clust-minlen60aa-id70perc-coverage.tsv           -> ../intermediate/module-6/...
         orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv -> ../intermediate/module-6/...
         contigs_tax_annot.tsv                                  -> ../intermediate/module-6/...  # only when skip_tax_annot=false
-        orfs_fun_annot.tsv                                     -> ../intermediate/module-6/...  # only when skip_fun_annot=false
+        orfs-minlen60aa-fun_annot.tsv                          -> ../intermediate/module-6/...  # only when skip_fun_annot=false
 ```
 
 ---
