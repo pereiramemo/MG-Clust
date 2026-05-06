@@ -9,7 +9,7 @@ process MODULE6 {
     container "ghcr.io/epereira/mg-clust/module-6:latest"
     publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
-           enabled: params.full_output || params.stop_at_module == 6                   
+           enabled: params.full_output.toBoolean() || params.stop_at_module == 6                   
 
     input:
     path(meancov_files)

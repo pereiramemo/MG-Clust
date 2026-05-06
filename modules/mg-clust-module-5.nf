@@ -9,7 +9,7 @@ process MODULE5 {
     container "ghcr.io/epereira/mg-clust/module-5:latest"
     publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
-           enabled: params.full_output || params.stop_at_module == 5         
+           enabled: params.full_output.toBoolean() || params.stop_at_module == 5         
 
     tag "${sample_name}"
 
