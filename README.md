@@ -1,10 +1,10 @@
 
-![MG-Clust logo](./figures/Mg-Clust_logo.png)
+![MG-Clust logo](./figures/MG-Clust_logo.png)
 ## Comprehensive characterization of functional compositional structure: Identifying and clustering ORF sequences from metagenomic data into Operational Protein Units
 
 [![DOI](https://zenodo.org/badge/521037888.svg)](https://doi.org/10.5281/zenodo.19493771)
 
-Mg-Clust is a Nextflow pipeline for computing Operational Protein Units (OPUs) from metagenomic data. It takes paired-end reads from multiple samples, assembles them, maps the reads back onto the assembled contigs to compute per-ORF coverage, predicts ORFs, and clusters them by amino acid sequence identity. Per-ORF coverage values are then aggregated across all ORFs within each cluster to produce two per-OPU abundance tables: one based on mean sequencing depth and one based on read counts. In addition, the pipeline annotates contigs taxonomically against the GTDB database, annotates ORFs functionally against KEGG KO HMM profiles, and merges all annotation and abundance tables into a single integrated output.
+MG-Clust is a Nextflow pipeline for computing Operational Protein Units (OPUs) from metagenomic data. It takes paired-end reads from multiple samples, assembles them, maps the reads back onto the assembled contigs to compute per-ORF coverage, predicts ORFs, and clusters them by amino acid sequence identity. Per-ORF coverage values are then aggregated across all ORFs within each cluster to produce two per-OPU abundance tables: one based on mean sequencing depth and one based on read counts. In addition, the pipeline annotates contigs taxonomically against the GTDB database, annotates ORFs functionally against KEGG KO HMM profiles, and merges all annotation and abundance tables into a single integrated output.
 
 ![MG-Clust workflow](./figures/MG-Clust_workflow-ENG.png)
 
@@ -22,7 +22,7 @@ Each module is implemented across four files that together define its logic, env
 | Nextflow process | `modules/mg-clust-module-N.nf` | Wraps the Python script; declares inputs, outputs, and container |
 
 ```
-Mg-Clust/
+MG-Clust/
 ├── bin/                               # Python pipeline scripts
 │   ├── mg-clust-module-1.py           # De novo assembly and read mapping
 │   ├── mg-clust-module-2.py           # ORF prediction and coverage estimation
@@ -128,7 +128,7 @@ data/reads/
 All parameters can be set in `nextflow.config` or overridden on the command line with `--param value`. Run `nextflow run main.nf --help` to print the full reference:
 
 ```
-Mg-Clust: Operational Protein Units from metagenomic paired-end reads
+MG-Clust: Operational Protein Units from metagenomic paired-end reads
 
 Usage: nextflow run main.nf [options]
 
@@ -562,7 +562,7 @@ Two key parameters — minimum ORF length (`--min_orf_len`) and clustering ident
 This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for the full text.
 
 ```
-Mg-Clust: Clustering of ORF sequences in metagenomic data
+MG-Clust: Clustering of ORF sequences in metagenomic data
 Copyright (C) 2024  epereira
 
 This program is free software: you can redistribute it and/or modify

@@ -13,7 +13,7 @@ workflow {
     main:
     if (params.help) {
         log.info """
-        Mg-Clust: Operational Protein Units from metagenomic paired-end reads
+        MG-Clust: Operational Protein Units from metagenomic paired-end reads
 
         Usage: nextflow run main.nf [options]
 
