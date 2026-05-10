@@ -36,7 +36,6 @@ process MODULE1 {
     script:
     def markdup_flag = params.markdup ? "--markdup" : ""
     """
-    echo $PATH
     mg-clust-module-1.py \
         --reads1             ${reads[0]} \
         --reads2             ${reads[1]} \
@@ -86,40 +85,6 @@ process MODULE2 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 3: concatenate all samples, filter ORFs, create MMseqs2 DB
-// Input:  all per-sample ORF FASTAs + coverage tables (collected)
-// Output: filtered ORF MMseqs2 DB + merged coverage tables
-// ─────────────────────────────────────────────────────────────────────────────
-
-process MODULE3 {
-    container "ghcr.io/epereira/mg-clust/module-3:latest"
-
-    publishDir "${params.output_dir}/module-3", mode: "copy"
-
-    input:
-    path(orf_files)
-    path(meancov_files)
-    path(readscov_files)
-
-    output:
-    path("orfs_filt_db*"),       emit: orfs_db
-    path("orfs_meancov.tsv"),    emit: meancov
-    path("orfs_readscov.tsv"),   emit: readscov
-
-    script:
-    """
-    mg-clust-module-3.py \
-        --orf_files      ${orf_files} \
-        --meancov_files  ${meancov_files} \
-        --readscov_files ${readscov_files} \
-        --output_dir     . \
-        --nslots         ${params.nslots} \
-        --min_orf_length ${params.min_orf_length} \
-        --overwrite
-    """
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // MODULE 4: cluster ORFs + generate abundance tables
 // Input:  MMseqs2 DB + merged coverage tables
 // Output: per-cluster abundance tables
@@ -156,6 +121,8 @@ process MODULE4 {
 // ─────────────────────────────────────────────────────────────────────────────
 // WORKFLOW
 // ─────────────────────────────────────────────────────────────────────────────
+
+
 
 workflow {
 
