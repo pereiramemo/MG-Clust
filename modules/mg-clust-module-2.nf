@@ -6,7 +6,7 @@
 
 process MODULE2 {
 
-    container "ghcr.io/epereira/mg-clust/module-2:latest"
+    container "ghcr.io/pereiramemo/mg-clust/module-2:latest"
     publishDir "${params.output_dir}/intermediate/",
            mode: "copy",
            enabled: params.full_output.toBoolean() || params.stop_at_module == 2            

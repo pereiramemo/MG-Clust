@@ -1,12 +1,31 @@
-#!/usr/bin/env nextflow
+#!/usr/bin/env -S nextflow run
 
 // Include modules
-include { MODULE1 } from './modules/mg-clust-module-1.nf'
+include { MODULE1; MODULE1_PRECOMPUTED } from './modules/mg-clust-module-1.nf'
 include { MODULE2 } from './modules/mg-clust-module-2.nf'
 include { MODULE3 } from './modules/mg-clust-module-3.nf'
 include { MODULE4 } from './modules/mg-clust-module-4.nf'
 include { MODULE5 } from './modules/mg-clust-module-5.nf'
 include { MODULE6 } from './modules/mg-clust-module-6.nf'
+
+// Derive a sample name from a filename + a single-'*' glob pattern, e.g.
+// filename "P01-A01-1.contigs.fa" + pattern "*.contigs.fa" -> "P01-A01-1".
+// Used to pair up independently-globbed precomputed assembly/BAM files by sample.
+def sampleNameFromGlob(filePath, String pattern) {
+    def stars = pattern.count('*')
+    if (stars != 1) {
+        error "Pattern '${pattern}' must contain exactly one '*' wildcard to derive a sample name"
+    }
+    def starIdx = pattern.indexOf('*')
+    def prefix  = java.util.regex.Pattern.quote(pattern.substring(0, starIdx))
+    def suffix  = java.util.regex.Pattern.quote(pattern.substring(starIdx + 1))
+    def regex   = java.util.regex.Pattern.compile('^' + prefix + '(.*)' + suffix + '$')
+    def m = regex.matcher(filePath.getName())
+    if (!m.matches()) {
+        error "File '${filePath.getName()}' does not match pattern '${pattern}'"
+    }
+    return m.group(1)
+}
 
 workflow {
 
@@ -27,6 +46,11 @@ workflow {
           --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: ${params.skip_tax_annot})
           --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: ${params.skip_fun_annot})
           --maxForks        INT   Max parallel process instances (default: ${params.maxForks})
+
+        Alternative input (skip MODULE1 assembly + mapping):
+          --precomputed_input             BOOL  Use precomputed assembly+bam instead of raw FASTQs (default: ${params.precomputed_input})
+          --precomputed_assembly_pattern  STR   Glob pattern for precomputed assemblies under --input_dir (default: ${params.precomputed_assembly_pattern})
+          --precomputed_bam_pattern       STR   Glob pattern for precomputed bams under --input_dir (default: ${params.precomputed_bam_pattern})
 
         MODULE1 — Assembly:
           --assem_preset    STR   MEGAHIT preset (default: ${params.assem_preset})
@@ -55,12 +79,6 @@ workflow {
         exit 0
     }
 
-    // Read paired-end samples from reads_dir using the pattern defined in nextflow.config
-    reads_ch = channel.fromFilePairs(
-        "${params.input_dir}/${params.reads_pattern}",
-        checkIfExists: true
-    )
-
     stop = params.stop_at_module as Integer
     log.info "Pipeline will run up to module ${stop}"
     if ("${params.skip_tax_annot}" == "true") {
@@ -70,8 +88,35 @@ workflow {
         log.info "Functional annotation will be skipped"
     }
 
-    // MODULE1: Assembly + read mapping (always runs)
-    module1_out = MODULE1(reads_ch)
+    // MODULE1: Assembly + read mapping, or a precomputed assembly + BAM per
+    // sample (whole-run switch, always runs)
+    if (params.precomputed_input.toBoolean()) {
+        log.info "Using precomputed assembly + bam input (skipping MODULE1 assembly/mapping)"
+
+        assembly_ch = channel.fromPath("${params.input_dir}/${params.precomputed_assembly_pattern}", checkIfExists: true)
+            .map { f -> tuple(sampleNameFromGlob(f, params.precomputed_assembly_pattern), f) }
+
+        bam_ch = channel.fromPath("${params.input_dir}/${params.precomputed_bam_pattern}", checkIfExists: true)
+            .map { f -> tuple(sampleNameFromGlob(f, params.precomputed_bam_pattern), f) }
+
+        module1_in_ch = assembly_ch.join(bam_ch, by: 0, remainder: true)
+            .map { sample_name, assembly, bam ->
+                if (assembly == null || bam == null) {
+                    error "Sample '${sample_name}' is missing its assembly or BAM -- check that " +
+                          "--precomputed_assembly_pattern and --precomputed_bam_pattern match the same set of samples"
+                }
+                tuple(sample_name, assembly, bam)
+            }
+
+        module1_out = MODULE1_PRECOMPUTED(module1_in_ch)
+    } else {
+        // Read paired-end samples from reads_dir using the pattern defined in nextflow.config
+        reads_ch = channel.fromFilePairs(
+            "${params.input_dir}/${params.reads_pattern}",
+            checkIfExists: true
+        )
+        module1_out = MODULE1(reads_ch)
+    }
 
     // MODULE2: ORF prediction + coverage estimation (per sample)
     if (stop >= 2) {

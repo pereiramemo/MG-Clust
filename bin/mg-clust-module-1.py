@@ -14,6 +14,12 @@ where dependencies are available on PATH.
 - Converts, filters, sorts, and indexes alignments with samtools
 - Optionally marks and removes duplicates with Picard MarkDuplicates
 - Removes intermediate files after completion
+
+Alternatively, --precomputed_assembly/--precomputed_bam can be given instead of
+--reads1/--reads2 to skip MEGAHIT and BWA-MEM entirely and reuse an
+already-assembled, already-mapped sample: the assembly still gets the same
+sample-name header prefixing, and the BAM is reheadered (via samtools reheader)
+so its @SQ contig names stay in agreement with the prefixed assembly.
 """
 
 ###############################################################################
@@ -63,11 +69,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", dest="overwrite", action="store_true", default=False,
         help="overwrite previous folder if present (default: False)")
 
-    parser.add_argument("--reads1", dest="reads1", required=True,
-        help="input R1 metagenome data (as fasta/q file)")
+    parser.add_argument("--reads1", dest="reads1", default=None,
+        help="input R1 metagenome data (as fasta/q file); required unless "
+             "--precomputed_assembly/--precomputed_bam are used")
 
-    parser.add_argument("--reads2", dest="reads2", required=True,
-        help="input R2 metagenome data (as fasta/q file)")
+    parser.add_argument("--reads2", dest="reads2", default=None,
+        help="input R2 metagenome data (as fasta/q file); required unless "
+             "--precomputed_assembly/--precomputed_bam are used")
+
+    parser.add_argument("--precomputed_assembly", dest="precomputed_assembly", default=None,
+        help="path to a precomputed assembly fasta; use together with --precomputed_bam "
+             "to skip MEGAHIT assembly and BWA-MEM mapping (default: None)")
+
+    parser.add_argument("--precomputed_bam", dest="precomputed_bam", default=None,
+        help="path to a precomputed, coordinate-sorted bam of reads mapped to "
+             "--precomputed_assembly; use together with --precomputed_assembly (default: None)")
 
     parser.add_argument("--sample_name", dest="sample_name", required=True,
         help="sample name used to name the files")
@@ -89,12 +105,33 @@ def main() -> None:
     check_tools([megahit, bwa, samtools, picard])
     args = parse_args()
 
+    precomputed = bool(args.precomputed_assembly or args.precomputed_bam)
+    raw_reads = bool(args.reads1 or args.reads2)
+
+    if precomputed and raw_reads:
+        print("--reads1/--reads2 cannot be combined with --precomputed_assembly/--precomputed_bam", file=sys.stderr)
+        sys.exit(1)
+    if precomputed and not (args.precomputed_assembly and args.precomputed_bam):
+        print("--precomputed_assembly and --precomputed_bam must be supplied together", file=sys.stderr)
+        sys.exit(1)
+    if not precomputed and not (args.reads1 and args.reads2):
+        print("either --reads1/--reads2 or --precomputed_assembly/--precomputed_bam is required", file=sys.stderr)
+        sys.exit(1)
+    if precomputed and args.markdup:
+        print("--markdup is not supported with --precomputed_assembly/--precomputed_bam; "
+              "dedupe the bam before supplying it", file=sys.stderr)
+        sys.exit(1)
+
     ###########################################################################
     # 3.1. Check mandatory files
     ###########################################################################
-    
-    check_file(args.reads1, "read1")
-    check_file(args.reads2, "read2")
+
+    if precomputed:
+        check_file(args.precomputed_assembly, "precomputed_assembly")
+        check_file(args.precomputed_bam, "precomputed_bam")
+    else:
+        check_file(args.reads1, "read1")
+        check_file(args.reads2, "read2")
 
     ###########################################################################
     # 3.2. Check output directory
@@ -121,35 +158,44 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.4. De novo assembly (always run MEGAHIT; it will create output_dir)
+    # 3.4. De novo assembly (run MEGAHIT, or stage a precomputed assembly)
     ###########################################################################
 
-    try:
-        megahit_ouput_dir = os.path.join(args.output_dir, "assembly")
-        run(
-            [
-                megahit,
-                "--num-cpu-threads",
-                str(args.nslots),
-                "-1",
-                args.reads1,
-                "-2",
-                args.reads2,
-                "--presets",
-                args.assem_preset,
-                "--min-contig-len",
-                str(args.min_contig_length),
-                "--out-prefix",
-                args.sample_name,
-                "--out-dir",
-                megahit_ouput_dir,
-            ]
-        )
-    except subprocess.CalledProcessError:
-        print("megahit failed", file=sys.stderr)
-        sys.exit(1)
-
+    megahit_ouput_dir = os.path.join(args.output_dir, "assembly")
     assembly_file = os.path.join(megahit_ouput_dir, f"{args.sample_name}.contigs.fa")
+
+    if precomputed:
+        try:
+            os.makedirs(megahit_ouput_dir, exist_ok=True)
+            shutil.copyfile(args.precomputed_assembly, assembly_file)
+        except Exception as e:
+            print(f"Failed to stage precomputed assembly into {assembly_file}: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        try:
+            run(
+                [
+                    megahit,
+                    "--num-cpu-threads",
+                    str(args.nslots),
+                    "-1",
+                    args.reads1,
+                    "-2",
+                    args.reads2,
+                    "--presets",
+                    args.assem_preset,
+                    "--min-contig-len",
+                    str(args.min_contig_length),
+                    "--out-prefix",
+                    args.sample_name,
+                    "--out-dir",
+                    megahit_ouput_dir,
+                ]
+            )
+        except subprocess.CalledProcessError:
+            print("megahit failed", file=sys.stderr)
+            sys.exit(1)
+
     # check if assembly_file exists
     check_file(assembly_file, "assembly_file")
     
@@ -194,58 +240,115 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.7. Map short reads
+    # 3.7. Map short reads, or reheader a precomputed BAM to match the
+    #      (now sample-name-prefixed) assembly
     ###########################################################################
 
-    # bwa index
-    try:
-        run([bwa, "index", assembly_file])
-    except subprocess.CalledProcessError:
-        print("bwa index failed", file=sys.stderr)
-        sys.exit(1)
+    if precomputed:
+        # Validate that the precomputed bam is coordinate-sorted: module 2's
+        # bedtools coverage -sorted produces silently wrong output otherwise.
+        header = subprocess.run(
+            [samtools, "view", "-H", args.precomputed_bam],
+            capture_output=True, text=True, check=False
+        )
+        if header.returncode != 0:
+            print(f"samtools failed to read --precomputed_bam header: {header.stderr}", file=sys.stderr)
+            sys.exit(1)
+        header_lines = header.stdout.splitlines()
+        hd_line = next((l for l in header_lines if l.startswith("@HD")), "")
+        if "SO:coordinate" not in hd_line:
+            print(f"--precomputed_bam must be coordinate-sorted; found @HD line: {hd_line!r}", file=sys.stderr)
+            sys.exit(1)
 
-    # bwa mem -> SAM
-    sam_path = os.path.join(args.output_dir, f"{args.sample_name}.sam")
-    try:
-        rg = f"@RG\\tID:{args.sample_name}\\tSM:{args.sample_name}\\tLB:{args.sample_name}"
-        run([bwa, "mem", "-M", "-t", str(args.nslots), "-R", rg,
-             assembly_file, args.reads1, args.reads2], stdout_path=sam_path)
-    except subprocess.CalledProcessError:
-        print("bwa mem failed", file=sys.stderr)
-        sys.exit(1)
+        # Rewrite @SQ SN: fields with the same idempotent sample-name prefix
+        # rule as 3.6; @HD/@PG/etc. and @SQ order/count/LN are left untouched.
+        # This is safe because BAM alignment records reference @SQ entries by
+        # positional index, not by name.
+        new_header_lines = []
+        for line in header_lines:
+            if not line.startswith("@SQ"):
+                new_header_lines.append(line)
+                continue
+            fields = line.split("\t")
+            for i, f in enumerate(fields):
+                if f.startswith("SN:"):
+                    sn = f[len("SN:"):]
+                    if not sn.startswith(f"{args.sample_name}|"):
+                        sn = f"{args.sample_name}|{sn}"
+                    fields[i] = f"SN:{sn}"
+            new_header_lines.append("\t".join(fields))
 
-    # samtools view -> BAM (filter)
-    # convert to bam and filter high-quality primary alignments
-    # flags taken from https://broadinstitute.github.io/picard/explain-flags.html
-    # secondary alignments are moved; however this makes very little difference
-    # ORFs coverage using F4 vs F260 flags had a MSE=0.00486 and Pearson cor 0.997 (same toydataset)
-    # Here we use -F 2308 (4 + 256 + 2048 = 2308) to filter out unmapped, secondary alignments, and supplementary alignments
+        reheader_txt = os.path.join(args.output_dir, f"{args.sample_name}_reheader.sam")
+        try:
+            with open(reheader_txt, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(new_header_lines) + "\n")
+        except Exception as e:
+            print(f"Failed to write rewritten bam header: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    bam_path = os.path.join(args.output_dir, f"{args.sample_name}.bam")
-    try:
-        run([samtools, "view", "-@", str(args.nslots), 
-             "-q", "10", "-F", "2308", "-b", "-o", bam_path, sam_path])
-    except subprocess.CalledProcessError:
-        print("samtools convert to bam failed", file=sys.stderr)
-        sys.exit(1)
+        sorted_bam_path = os.path.join(args.output_dir, f"{args.sample_name}_sorted.bam")
+        try:
+            run([samtools, "reheader", reheader_txt, args.precomputed_bam], stdout_path=sorted_bam_path)
+        except subprocess.CalledProcessError:
+            print("samtools reheader failed", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # bwa index
+        try:
+            run([bwa, "index", assembly_file])
+        except subprocess.CalledProcessError:
+            print("bwa index failed", file=sys.stderr)
+            sys.exit(1)
 
-    # samtools sort -> sorted BAM
-    sorted_bam_path = os.path.join(args.output_dir, f"{args.sample_name}_sorted.bam")
-    try:
-        run([samtools, "sort", "-@", str(args.nslots), "-o", sorted_bam_path, bam_path])
-    except subprocess.CalledProcessError:
-        print("samtools sort failed", file=sys.stderr)
-        sys.exit(1)
+        # bwa mem -> SAM
+        sam_path = os.path.join(args.output_dir, f"{args.sample_name}.sam")
+        try:
+            rg = f"@RG\\tID:{args.sample_name}\\tSM:{args.sample_name}\\tLB:{args.sample_name}"
+            run([bwa, "mem", "-M", "-t", str(args.nslots), "-R", rg,
+                 assembly_file, args.reads1, args.reads2], stdout_path=sam_path)
+        except subprocess.CalledProcessError:
+            print("bwa mem failed", file=sys.stderr)
+            sys.exit(1)
 
-    # samtools index
+        # samtools view -> BAM (filter)
+        # convert to bam and filter high-quality primary alignments
+        # flags taken from https://broadinstitute.github.io/picard/explain-flags.html
+        # secondary alignments are moved; however this makes very little difference
+        # ORFs coverage using F4 vs F260 flags had a MSE=0.00486 and Pearson cor 0.997 (same toydataset)
+        # Here we use -F 2308 (4 + 256 + 2048 = 2308) to filter out unmapped, secondary alignments, and supplementary alignments
+
+        bam_path = os.path.join(args.output_dir, f"{args.sample_name}.bam")
+        try:
+            run([samtools, "view", "-@", str(args.nslots),
+                 "-q", "10", "-F", "2308", "-b", "-o", bam_path, sam_path])
+        except subprocess.CalledProcessError:
+            print("samtools convert to bam failed", file=sys.stderr)
+            sys.exit(1)
+
+        # samtools sort -> sorted BAM
+        sorted_bam_path = os.path.join(args.output_dir, f"{args.sample_name}_sorted.bam")
+        try:
+            run([samtools, "sort", "-@", str(args.nslots), "-o", sorted_bam_path, bam_path])
+        except subprocess.CalledProcessError:
+            print("samtools sort failed", file=sys.stderr)
+            sys.exit(1)
+
+    # samtools index -- both modes converge here on sorted_bam_path
     try:
         run([samtools, "index", "-@", str(args.nslots), sorted_bam_path])
     except subprocess.CalledProcessError:
         print("samtools inex failed", file=sys.stderr)
         sys.exit(1)
 
+    #######################################################################
+    # 3.8. Define cleanup paths (mode-aware: a precomputed run never created
+    #      sam_path/bam_path, and never runs markdup -- see validation above)
+    #######################################################################
+
     # remove duplicates with Picard
-    if args.markdup:
+    if precomputed:
+        cleanup_paths = [reheader_txt]
+    elif args.markdup:
         tmp_dir = os.path.join(args.output_dir, "tmp")
         try:
             os.makedirs(tmp_dir, exist_ok=False)
@@ -274,10 +377,6 @@ def main() -> None:
             print("picard failed", file=sys.stderr)
             sys.exit(1)
 
-        #######################################################################
-        # 3.8. Define cleanup paths including the temporary directory if markdup was run
-        #######################################################################
-          
         cleanup_paths = [sam_path, bam_path, tmp_dir]
     else:
         cleanup_paths = [sam_path, bam_path]

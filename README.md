@@ -83,7 +83,7 @@ bash docker/dockerbuild_commands.sh
 Individual images can also be built separately:
 
 ```bash
-docker build --network=host -f docker/Dockerfile.module-N -t ghcr.io/epereira/mg-clust/module-N:latest .
+docker build --network=host -f docker/Dockerfile.module-N -t ghcr.io/pereiramemo/mg-clust/module-N:latest .
 ```
 
 > **Note:** Build commands must be run from the **repo root** because Dockerfiles reference paths under `docker/resources/` relative to the build context.
