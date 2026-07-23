@@ -8,6 +8,9 @@ where dependencies are available on PATH.
 - Predicts ORFs from an assembled metagenome using FragGeneScanRs
 - Converts ORF coordinates from the FragGeneScanRs .out file to BED format,
   converting 1-based start coordinates to 0-based as required by bedtools
+- Builds a bedtools genome file from the BAM header and sorts the BED file to
+  the same chromosome order, so bedtools coverage can run in -sorted mode
+  (streams both inputs instead of loading the BAM into memory)
 - Computes the number of reads per ORF using bedtools coverage
 - Computes mean depth per ORF using bedtools coverage -mean
 """
@@ -28,6 +31,7 @@ from utils import run, check_tools, check_file
 
 fraggenescan = "FragGeneScanRs"
 bedtools = "bedtools"
+samtools = "samtools"
 
 ###############################################################################
 # 2. Define utility functions
@@ -89,7 +93,7 @@ def add_sample(coverage_file: str, sample_name: str) -> None:
 
 def main() -> None:
 
-    check_tools([fraggenescan, bedtools])
+    check_tools([fraggenescan, bedtools, samtools])
     args = parse_args()
 
     ###########################################################################
@@ -184,17 +188,59 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.6. Get number of reads per ORF
+    # 3.6. Build bedtools genome file from BAM header
+    ###########################################################################
+
+    # The genome file's chromosome order is derived directly from the same BAM
+    # that bedtools coverage -sorted will scan below, so it is guaranteed by
+    # construction to match that BAM's coordinate-sort order.
+    genome_file = os.path.join(args.output_dir, f"{args.sample_name}_genome.txt")
+    try:
+        header = subprocess.run(
+            [samtools, "view", "-H", args.bam_file],
+            capture_output=True, text=True, check=False
+        )
+        if header.returncode != 0:
+            print(f"samtools failed to read BAM header: {header.stderr}", file=sys.stderr)
+            sys.exit(1)
+        with open(genome_file, "w", encoding="utf-8") as fh_out:
+            for line in header.stdout.splitlines():
+                if line.startswith("@SQ"):
+                    fields = dict(f.split(":", 1) for f in line.split("\t")[1:])
+                    fh_out.write(f"{fields['SN']}\t{fields['LN']}\n")
+    except Exception as exc:
+        print(f"Building bedtools genome file failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    ###########################################################################
+    # 3.7. Sort BED file according to genome file order
+    ###########################################################################
+
+    # bedtools coverage -sorted requires -a and -b to follow the same chromosome
+    # order as -g; this sorts the BED side, while the BAM side is already
+    # guaranteed by construction since module 1's samtools sort produced it.
+    sorted_bed_file = os.path.join(args.output_dir, f"{args.sample_name}_orfs_sorted.bed")
+    try:
+        run([bedtools, "sort", "-i", bed_file, "-g", genome_file], stdout_path=sorted_bed_file)
+    except subprocess.CalledProcessError:
+        print("bedtools sort of bed file failed", file=sys.stderr)
+        sys.exit(1)
+
+    ###########################################################################
+    # 3.8. Get number of reads per ORF
     ###########################################################################
 
     # Run bedtools coverage -counts to get read counts per ORF
+    # -sorted -g lets bedtools stream both inputs instead of loading the BAM into memory
     bedtool_reads = os.path.join(args.output_dir, f"{args.sample_name}_orfs_readscov.tsv")
     try:
         run(
-            [bedtools, "coverage", 
-             "-a", bed_file, 
+            [bedtools, "coverage",
+             "-a", sorted_bed_file,
              "-b", args.bam_file,
-             "-counts"],
+             "-counts",
+             "-sorted",
+             "-g", genome_file],
             stdout_path=bedtool_reads
         )
     except subprocess.CalledProcessError:
@@ -202,14 +248,15 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.7. Get mean coverage per ORF
+    # 3.9. Get mean coverage per ORF
     ###########################################################################
 
     # Run bedtools coverage -mean to get mean depth per ORF
     bedtools_mean = os.path.join(args.output_dir, f"{args.sample_name}_orfs_meancov.tsv")
     try:
         run(
-            [bedtools, "coverage", "-a", bed_file, "-b", args.bam_file, "-mean"],
+            [bedtools, "coverage", "-a", sorted_bed_file, "-b", args.bam_file, "-mean",
+             "-sorted", "-g", genome_file],
             stdout_path=bedtools_mean
         )
     except subprocess.CalledProcessError:
@@ -217,14 +264,14 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.8. Add sample names to mean coverage and read counts tables
+    # 3.10. Add sample names to mean coverage and read counts tables
     ###########################################################################
 
     add_sample(bedtool_reads, args.sample_name)
     add_sample(bedtools_mean, args.sample_name)
 
-    ########################################################################### 
-    # 3.9. Write output log and exit
+    ###########################################################################
+    # 3.11. Write output log and exit
     ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")

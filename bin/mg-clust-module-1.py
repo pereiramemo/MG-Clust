@@ -7,8 +7,11 @@ Assumes execution inside the conda environment "mg-clust-module-1" (or equivalen
 where dependencies are available on PATH.
 
 - Assembles paired-end reads with MEGAHIT
+- Aborts early if the assembly has fewer than --min_seq contigs
+- Prepends the sample name to contig headers so contig (and downstream ORF)
+  IDs stay unique across samples
 - Maps reads back to the assembly with BWA-MEM
-- Converts, filters, and sorts alignments with samtools
+- Converts, filters, sorts, and indexes alignments with samtools
 - Optionally marks and removes duplicates with Picard MarkDuplicates
 - Removes intermediate files after completion
 """
