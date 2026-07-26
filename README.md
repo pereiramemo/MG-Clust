@@ -24,7 +24,7 @@ Each module is implemented across four files that together define its logic, env
 ```
 MG-Clust/
 ├── bin/                               # Python pipeline scripts
-│   ├── mg-clust-module-1.py           # De novo assembly and read mapping
+│   ├── mg-clust-module-1.py           # De novo assembly and read mapping (or precomputed assembly/BAM)
 │   ├── mg-clust-module-2.py           # ORF prediction and coverage estimation
 │   ├── mg-clust-module-3.py           # ORF filtering, MMseqs2 DB creation, and clustering
 │   ├── mg-clust-module-4.py           # Taxonomic annotation via MMseqs2 + GTDB
@@ -47,7 +47,7 @@ MG-Clust/
 │       ├── requirements-module-5.yml
 │       └── requirements-module-6.yml
 ├── modules/
-│   ├── mg-clust-module-1.nf           # Nextflow process: MODULE1
+│   ├── mg-clust-module-1.nf           # Nextflow processes: MODULE1, MODULE1_ASSEMBLY_ONLY, MODULE1_PRECOMPUTED
 │   ├── mg-clust-module-2.nf           # Nextflow process: MODULE2
 │   ├── mg-clust-module-3.nf           # Nextflow process: MODULE3
 │   ├── mg-clust-module-4.nf           # Nextflow process: MODULE4
@@ -56,7 +56,7 @@ MG-Clust/
 ├── figures/
 │   └── MG-Clust.png                   # Pipeline diagram
 ├── test/                              # Test data and test scripts
-├── main.nf                            # Nextflow pipeline entry point
+├── mg-clust.nf                        # Nextflow pipeline entry point
 ├── nextflow.config                    # Pipeline configuration and parameters
 └── LICENSE
 ```
@@ -106,35 +106,54 @@ The database directories are bind-mounted into the containers at runtime so the 
 ## Quick start
 
 ```bash
-nextflow run main.nf --input_dir data/reads --output_dir results
-```
+# Try it immediately against the bundled 3-sample test dataset (default --from_reads_tsv)
+nextflow run mg-clust.nf --output_dir results
 
-By default, Nextflow looks for paired-end reads matching `*_R{1,2}*.fastq` inside `input_dir`.
+# Or point at your own samplesheet
+nextflow run mg-clust.nf --from_reads_tsv data/reads.tsv --output_dir results
+```
 
 ## Input
 
-Paired-end FASTQ files placed in the directory specified by `--input_dir`. Sample names are inferred automatically from filenames using `--reads_pattern`.
+MG-Clust reads a **TSV samplesheet** rather than scanning a directory. Which samplesheet it reads — and how much of module 1 (assembly + read mapping) actually runs — is selected with `--input_mode`. Each mode has its own `--*_tsv` parameter and column layout, so you can bring your own precomputed assembly and/or BAM instead of re-running MEGAHIT/BWA-MEM:
+
+| `--input_mode` | TSV parameter | TSV columns | What MODULE1 does |
+|---|---|---|---|
+| `from_reads` (default) | `--from_reads_tsv` | `sample_name`, `reads1`, `reads2` | MEGAHIT assembly + BWA-MEM mapping (full module 1) |
+| `from_assembly` | `--from_assembly_tsv` | `sample_name`, `assembly`, `reads1`, `reads2` | Skip MEGAHIT, reuse the given assembly; still run BWA-MEM mapping against it |
+| `from_bam` | `--from_bam_tsv` | `sample_name`, `assembly`, `bam` | Skip MEGAHIT and BWA-MEM entirely; reheader the given BAM so its contig names match the sample-prefixed assembly |
+
+Only the TSV matching the active `--input_mode` is read; the other two `--*_tsv` params are ignored.
 
 ```
-data/reads/
-    sample1_R1.fastq
-    sample1_R2.fastq
-    sample2_R1.fastq
-    sample2_R2.fastq
+# --from_reads_tsv
+sample_name    reads1                          reads2
+sample1        data/reads/sample1_R1.fastq     data/reads/sample1_R2.fastq
+sample2        data/reads/sample2_R1.fastq     data/reads/sample2_R2.fastq
+
+# --from_assembly_tsv
+sample_name    assembly                            reads1                         reads2
+sample1        data/assemblies/sample1.contigs.fa  data/reads/sample1_R1.fastq    data/reads/sample1_R2.fastq
+
+# --from_bam_tsv
+sample_name    assembly                            bam
+sample1        data/assemblies/sample1.contigs.fa  data/bams/sample1_sorted.bam
 ```
+
+> The BAM supplied via `from_bam` must already be coordinate-sorted and contain only reads mapped to the paired `assembly` file — module 1 validates the sort order and rewrites `@SQ` contig names to match the sample-prefixed assembly, but does not re-run mapping, filtering, or deduplication.
+
+Working example TSVs for all three modes ship in `test/data/` (`from_reads.tsv`, `from_assembly.tsv`, `from_bam.tsv`).
 
 ## Parameters
 
-All parameters can be set in `nextflow.config` or overridden on the command line with `--param value`. Run `nextflow run main.nf --help` to print the full reference:
+All parameters can be set in `nextflow.config` or overridden on the command line with `--param value`. Run `nextflow run mg-clust.nf --help` to print the full reference:
 
 ```
 MG-Clust: Operational Protein Units from metagenomic paired-end reads
 
-Usage: nextflow run main.nf [options]
+Usage: nextflow run mg-clust.nf [options]
 
 General:
-  --input_dir       DIR   Input directory with paired-end FASTQ files (default: ./test/data)
-  --reads_pattern   STR   Glob pattern for fromFilePairs (default: *_R{1,2}*.fastq)
   --output_dir      DIR   Output directory (default: ./test/mg-clust-output/)
   --nslots          INT   CPU threads per tool (default: 16)
   --stop_at_module  INT   Stop after module N, 1-6 (default: 6)
@@ -142,6 +161,12 @@ General:
   --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: false)
   --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: false)
   --maxForks        INT   Max parallel process instances (default: 3)
+
+Input mode (selects which TSV samplesheet MODULE1 reads):
+  --input_mode          STR  from_reads | from_assembly | from_bam (default: from_reads)
+  --from_reads_tsv       TSV  [from_reads]     sample_name, reads1, reads2           (default: ./test/data/from_reads.tsv)
+  --from_assembly_tsv    TSV  [from_assembly]  sample_name, assembly, reads1, reads2  (default: null)
+  --from_bam_tsv         TSV  [from_bam]       sample_name, assembly, bam             (default: null)
 
 MODULE1 — Assembly:
   --assem_preset    STR   MEGAHIT preset (default: meta-sensitive)
@@ -174,39 +199,39 @@ The `--stop_at_module` parameter allows the pipeline to be stopped after a speci
 
 ```bash
 # Run assembly and read mapping only (module 1)
-nextflow run main.nf --stop_at_module 1
+nextflow run mg-clust.nf --stop_at_module 1
 
 # Run through ORF prediction (modules 1–2)
-nextflow run main.nf --stop_at_module 2
+nextflow run mg-clust.nf --stop_at_module 2
 
 # Run through ORF filtering, DB creation, and clustering (modules 1–3)
-nextflow run main.nf --stop_at_module 3
+nextflow run mg-clust.nf --stop_at_module 3
 
 # Run through taxonomic annotation (modules 1–4)
-nextflow run main.nf --stop_at_module 4
+nextflow run mg-clust.nf --stop_at_module 4
 
 # Run through functional annotation (modules 1–5)
-nextflow run main.nf --stop_at_module 5
+nextflow run mg-clust.nf --stop_at_module 5
 
 # Run the full pipeline including table integration (modules 1–6, default)
-nextflow run main.nf
+nextflow run mg-clust.nf
 ```
 
 The outputs of the last module to run are always published to `--output_dir`. Intermediate module outputs (from earlier modules) are only published when `--full_output true` is set:
 
 ```bash
 # Run through module 2 and publish outputs from both modules 1 and 2
-nextflow run main.nf --stop_at_module 2 --full_output true
+nextflow run mg-clust.nf --stop_at_module 2 --full_output true
 ```
 
 Taxonomic and functional annotation can be skipped independently without stopping the pipeline early:
 
 ```bash
 # Run full pipeline but skip taxonomic annotation
-nextflow run main.nf --skip_tax_annot true
+nextflow run mg-clust.nf --skip_tax_annot true
 
 # Run full pipeline but skip functional annotation
-nextflow run main.nf --skip_fun_annot true
+nextflow run mg-clust.nf --skip_fun_annot true
 ```
 
 ---
@@ -221,9 +246,10 @@ nextflow run main.nf --skip_fun_annot true
 
 > Stop after this module with `--stop_at_module 1`.
 
-De novo assembly of paired-end reads and mapping back to the assembly.
+De novo assembly of paired-end reads and mapping back to the assembly. Supports three input combinations, matching the pipeline's three `--input_mode` values described above:
 
 ```bash
+# from_reads: MEGAHIT assembly + BWA-MEM mapping
 mg-clust-module-1.py \
     --reads1            <R1.fastq> \
     --reads2            <R2.fastq> \
@@ -235,24 +261,45 @@ mg-clust-module-1.py \
     --min_seq           5 \
     [--markdup] \
     [--overwrite]
+
+# from_assembly: skip MEGAHIT, reuse a precomputed assembly, still map with BWA-MEM
+mg-clust-module-1.py \
+    --precomputed_assembly <contigs.fa> \
+    --reads1               <R1.fastq> \
+    --reads2               <R2.fastq> \
+    --sample_name          <sample> \
+    --output_dir           <output_dir> \
+    --nslots                4 \
+    [--overwrite]
+
+# from_bam: skip MEGAHIT and BWA-MEM; reheader the given bam to match the
+# sample-name-prefixed assembly
+mg-clust-module-1.py \
+    --precomputed_assembly <contigs.fa> \
+    --precomputed_bam      <sorted.bam> \
+    --sample_name          <sample> \
+    --output_dir           <output_dir> \
+    [--overwrite]
 ```
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--reads1` | — | R1 FASTQ file (required) |
-| `--reads2` | — | R2 FASTQ file (required) |
+| `--reads1` | — | R1 FASTQ file; required unless `--precomputed_bam` is given |
+| `--reads2` | — | R2 FASTQ file; required unless `--precomputed_bam` is given |
+| `--precomputed_assembly` | `None` | Path to a precomputed assembly FASTA; skips MEGAHIT. Combine with `--precomputed_bam` to also skip BWA-MEM mapping, or with `--reads1`/`--reads2` to still map those reads against it |
+| `--precomputed_bam` | `None` | Path to a precomputed, coordinate-sorted BAM of reads mapped to `--precomputed_assembly`; skips BWA-MEM mapping entirely. Requires `--precomputed_assembly`; cannot be combined with `--reads1`/`--reads2` or `--markdup` |
 | `--sample_name` | — | Sample name used to prefix output files (required) |
 | `--output_dir` | — | Output directory (required) |
-| `--assem_preset` | `meta-sensitive` | MEGAHIT preset (`meta-sensitive`, `meta-large`, etc.) |
-| `--min_contig_length` | `250` | Discard contigs shorter than this (bp) |
+| `--assem_preset` | `meta-sensitive` | MEGAHIT preset (`meta-sensitive`, `meta-large`, etc.); ignored when `--precomputed_assembly` is given |
+| `--min_contig_length` | `250` | Discard contigs shorter than this (bp); ignored when `--precomputed_assembly` is given |
 | `--min_seq` | `5` | Minimum assembled sequences to continue |
-| `--markdup` | `false` | Run Picard MarkDuplicates to remove PCR duplicates |
+| `--markdup` | `false` | Run Picard MarkDuplicates to remove PCR duplicates; not supported with `--precomputed_bam` |
 | `--nslots` | `4` | Threads |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
 **Outputs:**
-- `<sample_name>/assembly/<sample_name>.contigs.fa` — assembled contigs
-- `<sample_name>/<sample_name>_sorted.bam` — coordinate-sorted BAM of reads mapped to contigs
+- `<sample_name>/assembly/<sample_name>.contigs.fa` — assembled (or staged) contigs, with sample-name-prefixed headers
+- `<sample_name>/<sample_name>_sorted.bam` — coordinate-sorted BAM of reads mapped to contigs (freshly mapped, or reheadered from `--precomputed_bam`)
 
 ---
 
