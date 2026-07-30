@@ -52,9 +52,12 @@ workflow {
           --tax_lineage     INT   MMseqs2 --tax-lineage flag (default: ${params.tax_lineage})
 
         MODULE5 — Functional annotation (KO HMMs):
-          --hmm_db          PATH  KO HMM profiles file (default: ${params.hmm_db})
+          --hmm_db          PATH  HMM profiles file (default: ${params.hmm_db})
+          --db_mode         STR   ko | ga | evalue scoring strategy (default: ${params.db_mode})
+          --ko_list         PATH  KOfam adaptive threshold file, --db_mode ko only (default: ${params.ko_list})
           --evalue_thres    NUM   E-value threshold (default: ${params.evalue_thres})
-          --cut_ga          BOOL  Use per-profile GA cutoffs (default: ${params.cut_ga})
+          --edge_tol        INT   aa tolerance for truncated-ORF rescue, --db_mode ko only (default: ${params.edge_tol})
+          --relax_evalue_factor NUM  E-value tightening factor for rescued hits, --db_mode ko only (default: ${params.relax_evalue_factor})
         """.stripIndent()
         exit 0
     }

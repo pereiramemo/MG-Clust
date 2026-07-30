@@ -6,8 +6,16 @@ Assumes execution inside the conda environment "mg-clust-module-6" (or equivalen
 
 - Concatenates per-sample mean coverage tables
 - Concatenates per-sample read coverage tables
-- Joins both coverages to the clustering TSV via DuckDB to produce:
-  opu_id, orf_id, read_coverage, mean_coverage
+- LEFT JOINs both coverages onto the clustering TSV via DuckDB (clust_tsv is the
+  driving table: an ORF with coverage but absent from clust_tsv, e.g. filtered out
+  upstream by module 3, is silently excluded rather than kept with zero coverage) to
+  produce a per-ORF table: sample_name, opu_id, orf_id, read_coverage, mean_coverage
+- Collapses that table by summing coverage per (sample_name, opu_id), dropping orf_id,
+  to produce the primary per-OPU abundance table
+- If given, also concatenates per-sample taxonomy and/or functional annotation files
+  into their own standalone tables (contigs_tax_annot.tsv,
+  orfs-minlen<N>aa-fun_annot.tsv) -- these are NOT joined against the coverage/OPU
+  tables above; they are separate outputs sharing sample-level provenance only
 """
 
 ###############################################################################
@@ -48,11 +56,15 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--tax_annot_files", dest="tax_annot_files", required=False, nargs="*",
-        help="list of per-sample taxonomy annotation files (*_orf_tax_annot.tsv)",
+        help="list of per-sample contig taxonomy annotation files from module 4 "
+             "(*_contig_tax_annot.tsv); concatenated into a standalone output, "
+             "not joined against the coverage/OPU tables",
     )
 
     parser.add_argument("--fun_annot_files", dest="fun_annot_files", required=False, nargs="*",
-        help="list of per-sample functional annotation files (*_orf_fun_annot.tsv)",
+        help="list of per-sample functional annotation files from module 5 "
+             "(*_orfs-minlen<N>aa-fun_annot.tsv); concatenated into a standalone "
+             "output, not joined against the coverage/OPU tables",
     )
 
     parser.add_argument("--clust_tsv", dest="clust_tsv", required=True,

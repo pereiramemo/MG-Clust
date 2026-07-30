@@ -6,8 +6,14 @@ Assumes execution inside the conda environment "mg-clust-module-5" (or equivalen
 where pyhmmer is importable.
 
 - Searches ORF protein sequences against a HMM database (default: KEGG KO profiles)
-- Uses per-model gathering thresholds if available (--cut_ga), otherwise applies an e-value threshold
-- Exports a domain table and a best-hit annotation table (one KO per ORF)
+- --db_mode selects the scoring strategy:
+    ko:     KOfam adaptive per-KO thresholds (ko_list) with coverage-aware rescue
+            of truncated ORFs and an e-value-only fallback for KOs with no
+            cross-validated threshold (nt-KOs)
+    ga:     per-model GA/TC/NC cutoffs embedded in the HMM file (bit_cutoffs="gathering")
+    evalue: a single global --evalue_thres applied uniformly to all models
+- Exports two tables: a collapsed one-KO-per-ORF summary (best hit per ORF) and a
+  rich multi-KO-per-ORF table with every accepted (ORF, KO) pair
 """
 
 ###############################################################################
@@ -16,6 +22,7 @@ where pyhmmer is importable.
 
 import argparse
 import glob
+import gzip
 import os
 import shutil
 import sys
@@ -29,6 +36,30 @@ from utils import check_file
 KO_DEFAULT = os.path.join(os.path.expanduser("~"), ".mg-clust", "db", "ko", "ko_profiles.hmm")
 KO_PROFILES_URL = "https://www.genome.jp/ftp/db/kofam/profiles.tar.gz"
 
+KO_LIST_DEFAULT = os.path.join(os.path.expanduser("~"), ".mg-clust", "db", "ko", "ko_list.tsv")
+KO_LIST_URL = "https://www.genome.jp/ftp/db/kofam/ko_list.gz"
+
+# ko mode: raw hmmsearch domE bound, deliberately looser than --evalue_thres since
+# all real filtering happens post-hoc in Python against ko_list thresholds
+RAW_DOME_MULTIPLIER = 10
+
+# ga mode: how many missing-model names to print when reporting a partial/total failure
+GA_MISSING_SAMPLE_N = 10
+
+# ga mode: if the first this-many models are ALL missing GA cutoffs, stop scanning and
+# fail fast rather than churning through the rest of a large (e.g. KOfam-sized) database
+# one model at a time only to reach the same "wrong mode" conclusion
+GA_EARLY_FAIL_SAMPLE = 50
+
+# best-hit ranking: lower rank wins; ties broken by each tier's own secondary key
+TIER_RANK = {
+    "confident": 0,
+    "rescued_partial": 1,
+    "nt_ko_evalue_only": 2,
+    "ga_pass": 0,
+    "evalue_pass": 0,
+}
+
 ###############################################################################
 # 2. Define utility functions
 ###############################################################################
@@ -39,7 +70,7 @@ KO_PROFILES_URL = "https://www.genome.jp/ftp/db/kofam/profiles.tar.gz"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=f"{os.path.basename(__file__)}: Functional annotation of ORFs using pyHMMER", 
+        description=f"{os.path.basename(__file__)}: Functional annotation of ORFs using pyHMMER",
         add_help=False)
 
     parser.add_argument("--help", action="help", help="print this help")
@@ -50,15 +81,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hmm_db", dest="hmm_db", default=KO_DEFAULT,
         help=f"path to HMM database (default: KO profiles at {KO_DEFAULT})")
 
-    parser.add_argument("--evalue_thres", dest="evalue_thres", type=float, default=1e-3,
-        help="e-value threshold for hmmsearch (default: 1e-3; ignored when --cut_ga is set)")
+    parser.add_argument("--db_mode", dest="db_mode", required=True,
+        choices=["ko", "ga", "evalue"],
+        help="scoring strategy: ko (KOfam adaptive thresholds + truncation-aware "
+             "rescue), ga (embedded per-model GA/TC/NC cutoffs), evalue (single "
+             "global --evalue_thres). Required; no default")
+
+    parser.add_argument("--ko_list", dest="ko_list", default=KO_LIST_DEFAULT,
+        help=f"path to KOfam ko_list threshold file (default: {KO_LIST_DEFAULT}); "
+             "only used, fetched, and required when --db_mode ko")
+
+    parser.add_argument("--evalue_thres", dest="evalue_thres", type=float, default=1e-5,
+        help="e-value threshold (default: 1e-5); sole criterion in --db_mode evalue, "
+             "fallback bar for nt-KOs and base guard for --relax_evalue_factor in "
+             "--db_mode ko, unused in --db_mode ga")
+
+    parser.add_argument("--edge_tol", dest="edge_tol", type=int, default=3,
+        help="aa tolerance for alignment-flush check when detecting truncated ORFs "
+             "(default: 3; --db_mode ko only)")
+
+    parser.add_argument("--relax_evalue_factor", dest="relax_evalue_factor", type=float, default=100,
+        help="factor by which the e-value bar is tightened for rescued truncated-ORF "
+             "hits (default: 100; --db_mode ko only)")
 
     parser.add_argument("--min_orf_len", dest="min_orf_len", type=int, default=60,
         help="minimum ORF length (default: 60)")
-
-    parser.add_argument("--cut_ga", dest="cut_ga",
-        action=argparse.BooleanOptionalAction, default=False,
-        help="use per-model gathering thresholds (default: False; use --cut_ga to enable)")
 
     parser.add_argument("--sample_name", dest="sample_name", required=True,
         help="sample name used to name the files")
@@ -74,53 +121,314 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
-###############################################################################
-# 2.2 Run pyhmmer hmmsearch and write domain table
-###############################################################################
-
-def run_hmmsearch(hmm_db, orfs_faa, domtblout, evalue_thres, cut_ga, nslots):
-    with pyhmmer.plan7.HMMFile(hmm_db) as hmms:
-        with pyhmmer.easel.SequenceFile(orfs_faa, digital=True) as seqs:
-            with open(domtblout, "wb") as out:
-                if cut_ga:
-                    # domE acts as fallback for profiles without GA thresholds
-                    for hits in pyhmmer.hmmer.hmmsearch(
-                        hmms, seqs, domE=evalue_thres, bit_cutoffs="gathering", cpus=nslots
-                    ):
-                        hits.write(out, format="domains", header=False)
-                else:
-                    for hits in pyhmmer.hmmer.hmmsearch(
-                        hmms, seqs, domE=evalue_thres, cpus=nslots
-                    ):
-                        hits.write(out, format="domains", header=False)
+# Dev only
+"""
+orfs_faa = "/home/epereira/workspace/repos/tools/MG-Clust/test/mg-clust-output/intermediate/module-2/P01-A01-1/P01-A01-1_orfs.faa"
+hmm_db = "/home/epereira/.mg-clust/db/ko/ko_profiles.hmm"
+db_mode = "ko"
+ko_list = "/home/epereira/.mg-clust/db/ko/ko_list.tsv"
+evalue_thres = 1e-3
+edge_tol = 3
+relax_evalue_factor = 100
+min_orf_len = 60
+sample_name = "P01-A01-1"
+nslots = 4
+output_dir = "/home/epereira/workspace/repos/tools/MG-Clust/test/test_output/module-5/dev"
+overwrite = True
+"""
 
 ###############################################################################
-# 2.3 Parse domain table and write best-hit annotation table
+# 2.2 Fetch/cache the KO HMM profiles (unchanged download/extract/concat logic)
 ###############################################################################
 
-def write_best_hits(domtblout, annotation_table):
-    args = parse_args()
-    # domain table columns (0-indexed after whitespace split):
-    #  0: target (ORF) name, 3: query (KO profile) name,
-    #  6: full-sequence E-value,  7: full-sequence score
-    best = {}  # orf_id -> (ko_id, score, evalue)
-    with open(domtblout, "rb") as fh:
+def _fetch_ko_profiles(hmm_db: str) -> None:
+    ko_dir = os.path.dirname(hmm_db)
+    os.makedirs(ko_dir, exist_ok=True)
+    """"""
+    archive = os.path.join(ko_dir, "profiles.tar.gz")
+    print(f"Downloading KO profiles from {KO_PROFILES_URL} ...")
+    urllib.request.urlretrieve(KO_PROFILES_URL, archive)
+    """"""
+    print("Extracting profiles ...")
+    with tarfile.open(archive) as tar:
+        tar.extractall(ko_dir)
+    profiles_dir = os.path.join(ko_dir, "profiles")
+    hmm_files = sorted(glob.glob(os.path.join(profiles_dir, "*.hmm")))
+    if not hmm_files:
+        raise RuntimeError("no .hmm files found after extraction")
+    """"""
+    print(f"Concatenating {len(hmm_files)} HMM profiles into {hmm_db} ...")
+    with open(hmm_db, "wb") as out:
+        for hmm_file in hmm_files:
+            with open(hmm_file, "rb") as f:
+                out.write(f.read())
+    """"""
+    os.remove(archive)
+    shutil.rmtree(profiles_dir)
+
+###############################################################################
+# 2.3 Fetch/cache the KOfam ko_list threshold file
+###############################################################################
+
+def _fetch_ko_list(ko_list_path: str) -> None:
+    ko_dir = os.path.dirname(ko_list_path)
+    os.makedirs(ko_dir, exist_ok=True)
+    """"""
+    archive = os.path.join(ko_dir, "ko_list.gz")
+    print(f"Downloading ko_list from {KO_LIST_URL} ...")
+    urllib.request.urlretrieve(KO_LIST_URL, archive)
+    """"""
+    print(f"Decompressing ko_list into {ko_list_path} ...")
+    with gzip.open(archive, "rb") as gz_in, open(ko_list_path, "wb") as out:
+        shutil.copyfileobj(gz_in, out)
+    """"""
+    os.remove(archive)
+
+###############################################################################
+# 2.4 Ensure ko_profiles.hmm + ko_list are present as a matched pair (db_mode="ko")
+###############################################################################
+
+def ensure_ko_database(hmm_db: str, ko_list_path: str) -> None:
+    if os.path.isfile(hmm_db) and os.path.isfile(ko_list_path):
+        return
+    """"""
+    print("ko_profiles.hmm + ko_list cache incomplete; (re-)fetching both together ...")
+    failures = []
+    """"""
+    try:
+        _fetch_ko_profiles(hmm_db)
+    except Exception as exc:
+        failures.append(f"ko_profiles.hmm ({exc})")
+    """"""
+    try:
+        _fetch_ko_list(ko_list_path)
+    except Exception as exc:
+        failures.append(f"ko_list ({exc})")
+    """"""
+    if failures or not (os.path.isfile(hmm_db) and os.path.isfile(ko_list_path)):
+        print(f"KO database setup failed for: {'; '.join(failures) if failures else 'unknown reason'}",
+              file=sys.stderr)
+        sys.exit(1)
+    """"""
+    print("KO profiles + ko_list ready.")
+
+###############################################################################
+# 2.5 Parse ko_list into ko_id -> (threshold, score_type)
+###############################################################################
+
+def parse_ko_list(ko_list_path: str) -> dict:
+    thresholds = {}
+    with open(ko_list_path, "r", encoding="utf-8") as fh:
+        next(fh, None)  # skip header
         for line in fh:
-            if line.startswith(b"#"):
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) < 3:
                 continue
-            cols = line.split()
-            if len(cols) < 8:
-                continue
-            orf_id = cols[0].decode()
-            ko_id  = cols[3].decode()
-            evalue = float(cols[6])
-            score  = float(cols[7])
-            if orf_id not in best or score > best[orf_id][1]:
-                best[orf_id] = (ko_id, score, evalue)
+            ko_id, threshold_str, score_type = cols[0], cols[1], cols[2]
+            if threshold_str == "-":
+                thresholds[ko_id] = (None, None)
+            else:
+                thresholds[ko_id] = (float(threshold_str), score_type)
+    return thresholds
 
-    with open(annotation_table, "w") as out:
-        for orf_id, (ko_id, score, evalue) in sorted(best.items()):
-            out.write(f"{orf_id}\t{ko_id}\t{score:.2f}\t{evalue:.2e}\n")
+###############################################################################
+# 2.6 Load ORF sequences: lengths dict + digital sequence block for hmmsearch
+###############################################################################
+
+def load_orfs(orfs_faa: str):
+    with pyhmmer.easel.SequenceFile(orfs_faa, digital=True) as seq_file:
+        block = seq_file.read_block()
+    orf_lengths = {seq.name.decode(): len(seq) for seq in block}
+    return orf_lengths, block
+
+###############################################################################
+# 2.7 Run hmmsearch: ga mode (per-model GA/TC/NC cutoffs)
+###############################################################################
+
+def run_ga_mode(hmm_db: str, block, nslots: int):
+    # A single batched `hmmsearch(hmms, ...)` call aborts entirely (the generator
+    # raises StopIteration on the next() call right after the first MissingCutoffs),
+    # so per-model failures can't be skipped within one call -- each query HMM must
+    # be searched individually to isolate failures from one another.
+    missing_models = []
+    total_models = 0
+    all_hits = []
+
+    with pyhmmer.plan7.HMMFile(hmm_db) as hmms:
+        for hmm in hmms:
+            total_models += 1
+            try:
+                hits = list(pyhmmer.hmmer.hmmsearch(hmm, block, bit_cutoffs="gathering", cpus=nslots))
+            except pyhmmer.errors.MissingCutoffs as exc:
+                missing_models.append(getattr(exc, "model_name", None) or str(exc))
+                if total_models >= GA_EARLY_FAIL_SAMPLE and len(missing_models) == total_models:
+                    break
+                continue
+            all_hits.extend(hits)
+
+    if missing_models:
+        sample = missing_models[:GA_MISSING_SAMPLE_N]
+        print(f"{len(missing_models)}/{total_models} models scanned are missing embedded "
+              f"GA cutoffs (sample: {', '.join(sample)}"
+              f"{', ...' if len(missing_models) > GA_MISSING_SAMPLE_N else ''})",
+              file=sys.stderr)
+        if len(missing_models) == total_models:
+            print("No model in this HMM database has embedded GA cutoffs; --db_mode ga "
+                  "is not usable against it. Use --db_mode ko or --db_mode evalue instead.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    return all_hits
+
+###############################################################################
+# 2.8 Run hmmsearch: evalue mode (single global e-value threshold)
+###############################################################################
+
+def run_evalue_mode(hmm_db: str, block, evalue_thres: float, nslots: int):
+    with pyhmmer.plan7.HMMFile(hmm_db) as hmms:
+        yield from pyhmmer.hmmer.hmmsearch(hmms, block, domE=evalue_thres, cpus=nslots)
+
+###############################################################################
+# 2.9 Run hmmsearch: ko mode (loose raw bound; real filtering happens in Python)
+###############################################################################
+
+def run_ko_mode(hmm_db: str, block, evalue_thres: float, nslots: int):
+    raw_domE = evalue_thres * RAW_DOME_MULTIPLIER
+    with pyhmmer.plan7.HMMFile(hmm_db) as hmms:
+        yield from pyhmmer.hmmer.hmmsearch(hmms, block, domE=raw_domE, cpus=nslots)
+
+###############################################################################
+# 2.10 Build rows for the simple pass/fail modes (ga, evalue)
+###############################################################################
+
+def rows_from_simple_hits(hits_iter, tier_label: str) -> list:
+    rows = []
+    for hits in hits_iter:
+        ko_id = hits.query.name.decode()
+        for hit in hits:
+            rows.append({
+                "orf_id": hit.name.decode(),
+                "ko_id": ko_id,
+                "score": hit.score,
+                "evalue": hit.evalue,
+                "coverage": "NA",
+                "tier": tier_label,
+            })
+    return rows
+
+###############################################################################
+# 2.11 Classify a single (ORF, KO) hit against its ko_list threshold (db_mode="ko")
+###############################################################################
+
+def classify_ko_hit(orf_id, ko_id, hit, orf_len, model_len, threshold, score_type,
+                     edge_tol, evalue_thres, relax_evalue_factor):
+    dom = hit.best_domain
+    aln = dom.alignment
+
+    hmm_from, hmm_to = aln.hmm_from, aln.hmm_to
+    target_from, target_to = aln.target_from, aln.target_to
+
+    coverage = (hmm_to - hmm_from + 1) / model_len
+    missing_n = hmm_from > 1
+    missing_c = hmm_to < model_len
+    flush_n = target_from <= edge_tol
+    flush_c = target_to >= orf_len - edge_tol
+    truncation_explains_gap = (missing_n and flush_n) or (missing_c and flush_c)
+
+    evalue = dom.i_evalue
+
+    if threshold is not None:
+        score = hit.score if score_type == "full" else dom.score
+
+        if score >= threshold:
+            tier = "confident"
+        elif truncation_explains_gap:
+            if score >= threshold * coverage and evalue <= evalue_thres / relax_evalue_factor:
+                tier = "rescued_partial"
+            else:
+                tier = "reject"
+        else:
+            tier = "reject"
+    else:
+        score = hit.score
+        if evalue <= evalue_thres:
+            tier = "nt_ko_evalue_only"
+        else:
+            tier = "reject"
+
+    if tier == "reject":
+        return None
+
+    return {
+        "orf_id": orf_id,
+        "ko_id": ko_id,
+        "score": score,
+        "evalue": evalue,
+        "coverage": coverage,
+        "tier": tier,
+    }
+
+###############################################################################
+# 2.12 Build rows for db_mode="ko" over all (ORF, KO) hits
+###############################################################################
+
+def rows_from_ko_hits(hits_iter, orf_lengths, ko_thresholds, edge_tol,
+                       evalue_thres, relax_evalue_factor) -> list:
+    rows = []
+    for hits in hits_iter:
+        ko_id = hits.query.name.decode()
+        model_len = hits.query.M
+        threshold, score_type = ko_thresholds.get(ko_id, (None, None))
+        for hit in hits:
+            orf_id = hit.name.decode()
+            orf_len = orf_lengths.get(orf_id)
+            if orf_len is None:
+                continue
+            row = classify_ko_hit(orf_id, ko_id, hit, orf_len, model_len, threshold, score_type,
+                                   edge_tol, evalue_thres, relax_evalue_factor)
+            if row is not None:
+                rows.append(row)
+    return rows
+
+###############################################################################
+# 2.13 Rank rows (best-hit selection across competing KOs per ORF)
+###############################################################################
+
+def rank_key(row: dict, ko_thresholds: dict) -> tuple:
+    tier = row["tier"]
+    rank = TIER_RANK[tier]
+    if tier in ("confident", "rescued_partial"):
+        threshold, _ = ko_thresholds[row["ko_id"]]
+        margin = row["score"] - threshold
+        return (rank, -margin)
+    # nt_ko_evalue_only, ga_pass, evalue_pass: tie-break by e-value alone
+    return (rank, row["evalue"])
+
+###############################################################################
+# 2.14 Collapse to one best KO per ORF
+###############################################################################
+
+def collapse_best_per_orf(rows: list, ko_thresholds: dict) -> list:
+    best = {}
+    for row in rows:
+        orf_id = row["orf_id"]
+        if orf_id not in best or rank_key(row, ko_thresholds) < rank_key(best[orf_id], ko_thresholds):
+            best[orf_id] = row
+    return [best[orf_id] for orf_id in sorted(best)]
+
+###############################################################################
+# 2.15 Write a rows table to disk (headerless, matches module 6's raw concatenation)
+###############################################################################
+
+def write_table(rows: list, path: str) -> None:
+    with open(path, "w") as out:
+        for row in sorted(rows, key=lambda r: (r["orf_id"], r["ko_id"])):
+            coverage = row["coverage"]
+            coverage_str = f"{coverage:.4f}" if isinstance(coverage, float) else coverage
+            out.write(
+                f"{row['orf_id']}\t{row['ko_id']}\t{row['score']:.2f}\t"
+                f"{row['evalue']:.2e}\t{coverage_str}\t{row['tier']}\n"
+            )
 
 ###############################################################################
 # 3. Define the main function
@@ -136,53 +444,13 @@ def main() -> None:
     check_file(args.orfs_faa, "ORF protein FASTA file")
 
     ###########################################################################
-    # 3.2. Check KO HMM database; download if absent
+    # 3.2. Check/fetch the HMM database (behavior depends on --db_mode)
     ###########################################################################
 
-    if not os.path.isfile(args.hmm_db):
-        print(f"HMM database not found at {args.hmm_db}; downloading KO profiles ...")
-        ko_dir = os.path.dirname(args.hmm_db)
-        try:
-            os.makedirs(ko_dir, exist_ok=True)
-        except Exception:
-            print(f"mkdir {ko_dir} failed", file=sys.stderr)
-            sys.exit(1)
-
-        archive = os.path.join(ko_dir, "profiles.tar.gz")
-        try:
-            print(f"Downloading KO profiles from {KO_PROFILES_URL} ...")
-            urllib.request.urlretrieve(KO_PROFILES_URL, archive)
-        except Exception as exc:
-            print(f"Download of KO profiles failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        try:
-            print("Extracting profiles ...")
-            with tarfile.open(archive) as tar:
-                tar.extractall(ko_dir)
-        except Exception as exc:
-            print(f"Extraction failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        profiles_dir = os.path.join(ko_dir, "profiles")
-        hmm_files = sorted(glob.glob(os.path.join(profiles_dir, "*.hmm")))
-        if not hmm_files:
-            print("No .hmm files found after extraction", file=sys.stderr)
-            sys.exit(1)
-
-        try:
-            print(f"Concatenating {len(hmm_files)} HMM profiles into {args.hmm_db} ...")
-            with open(args.hmm_db, "wb") as out:
-                for hmm_file in hmm_files:
-                    with open(hmm_file, "rb") as f:
-                        out.write(f.read())
-        except Exception as exc:
-            print(f"Concatenation of HMM profiles failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        os.remove(archive)
-        shutil.rmtree(profiles_dir)
-        print("KO HMM database ready.")
+    if args.db_mode == "ko":
+        ensure_ko_database(args.hmm_db, args.ko_list)
+    else:
+        check_file(args.hmm_db, "HMM database")
 
     ###########################################################################
     # 3.3. Check output directory
@@ -209,46 +477,69 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.5. Run hmmsearch
+    # 3.5. Load ORF sequences
     ###########################################################################
 
-    domtblout = os.path.join(args.output_dir, "orfs_ko_domtblout.txt")
+    try:
+        orf_lengths, block = load_orfs(args.orfs_faa)
+    except Exception as exc:
+        print(f"loading ORF sequences failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    ###########################################################################
+    # 3.6. Run hmmsearch and classify hits, dispatching on --db_mode
+    ###########################################################################
+
+    ko_thresholds = {}
 
     try:
-        run_hmmsearch(
-            hmm_db=args.hmm_db,
-            orfs_faa=args.orfs_faa,
-            domtblout=domtblout,
-            evalue_thres=args.evalue_thres,
-            cut_ga=args.cut_ga,
-            nslots=args.nslots,
-        )
+        if args.db_mode == "ko":
+            ko_thresholds = parse_ko_list(args.ko_list)
+            hits_iter = run_ko_mode(args.hmm_db, block, args.evalue_thres, args.nslots)
+            rows = rows_from_ko_hits(hits_iter, orf_lengths, ko_thresholds, args.edge_tol,
+                                      args.evalue_thres, args.relax_evalue_factor)
+        elif args.db_mode == "ga":
+            hits = run_ga_mode(args.hmm_db, block, args.nslots)
+            rows = rows_from_simple_hits(hits, "ga_pass")
+        else:
+            hits_iter = run_evalue_mode(args.hmm_db, block, args.evalue_thres, args.nslots)
+            rows = rows_from_simple_hits(hits_iter, "evalue_pass")
     except Exception as exc:
         print(f"hmmsearch failed: {exc}", file=sys.stderr)
         sys.exit(1)
-        
+
     ###########################################################################
-    # 3.6. Write best-hit annotation table
+    # 3.7. Collapse to best hit per ORF
     ###########################################################################
 
-    annotation_table = os.path.join(args.output_dir, f"{args.sample_name}_orfs-minlen{args.min_orf_len}aa-fun_annot.tsv")
+    best_rows = collapse_best_per_orf(rows, ko_thresholds)
+
+    ###########################################################################
+    # 3.8. Write collapsed (one-KO-per-ORF) and rich (multi-KO-per-ORF) tables
+    ###########################################################################
+
+    collapsed_table = os.path.join(
+        args.output_dir, f"{args.sample_name}_orfs-minlen{args.min_orf_len}aa-fun_annot.tsv")
+    multi_table = os.path.join(
+        args.output_dir, f"{args.sample_name}_orfs-minlen{args.min_orf_len}aa-fun_annot_multi.tsv")
 
     try:
-        write_best_hits(domtblout, annotation_table)
+        write_table(best_rows, collapsed_table)
+        write_table(rows, multi_table)
     except Exception as exc:
-        print(f"Writing annotation table failed: {exc}", file=sys.stderr)
+        print(f"writing annotation tables failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    ########################################################################### 
-    # 3.7. Write output log and exit
     ###########################################################################
-    
+    # 3.9. Write output log and exit
+    ###########################################################################
+
     print(f"{os.path.basename(__file__)} exited successfully")
     sys.exit(0)
 
-###########################################################################
+###############################################################################
 # 4. Run the main function
-###########################################################################
+###############################################################################
 
 if __name__ == "__main__":
     main()

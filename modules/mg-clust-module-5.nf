@@ -17,17 +17,21 @@ process MODULE5 {
     tuple val(sample_name), path(orfs_faa)
 
     output:
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot.tsv"),   emit: fun_annot
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot.tsv"),       emit: fun_annot
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot_multi.tsv"), emit: fun_annot_multi
 
     script:
     """
     mg-clust-module-5.py \
         --orfs_faa      ${orfs_faa} \
         --hmm_db        ${params.hmm_db} \
+        --db_mode       ${params.db_mode} \
+        --ko_list       ${params.ko_list} \
         --sample_name   ${sample_name} \
         --evalue_thres  ${params.evalue_thres} \
-        --min_orf_len ${params.min_orf_len} \
-        ${params.cut_ga ? '--cut_ga' : '--no-cut_ga'} \
+        --min_orf_len   ${params.min_orf_len} \
+        --edge_tol      ${params.edge_tol} \
+        --relax_evalue_factor ${params.relax_evalue_factor} \
         --nslots        ${params.nslots} \
         --output_dir    ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --overwrite

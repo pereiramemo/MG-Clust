@@ -4,7 +4,7 @@
 
 [![DOI](https://zenodo.org/badge/521037888.svg)](https://doi.org/10.5281/zenodo.19493771)
 
-MG-Clust is a Nextflow pipeline for computing Operational Protein Units (OPUs) from metagenomic data. It takes paired-end reads from multiple samples, assembles them, maps the reads back onto the assembled contigs to compute per-ORF coverage, predicts ORFs, and clusters them by amino acid sequence identity. Per-ORF coverage values are then aggregated across all ORFs within each cluster to produce two per-OPU abundance tables: one based on mean sequencing depth and one based on read counts. In addition, the pipeline annotates contigs taxonomically against the GTDB database, annotates ORFs functionally against KEGG KO HMM profiles, and merges all annotation and abundance tables into a single integrated output.
+MG-Clust is a Nextflow pipeline for computing Operational Protein Units (OPUs) from metagenomic data. It takes paired-end reads from multiple samples, assembles them, maps the reads back onto the assembled contigs to compute per-ORF coverage, predicts ORFs, and clusters them by amino acid sequence identity. Per-ORF coverage values are then aggregated across all ORFs within each cluster to produce two per-OPU abundance tables: one based on mean sequencing depth and one based on read counts. In addition, the pipeline annotates contigs taxonomically against the GTDB database and annotates ORFs functionally against KEGG KO HMM profiles, publishing these as standalone concatenated tables alongside the per-OPU abundance tables (they are not joined into the abundance tables).
 
 ![MG-Clust workflow](./figures/MG-Clust_workflow-ENG.png)
 
@@ -377,7 +377,7 @@ mg-clust-module-3.py \
 
 > Stop after this module with `--stop_at_module 4`. Runs in parallel per sample.
 
-Taxonomic annotation of assembled contigs against the GTDB database using MMseqs2 taxonomy. Also maps contig-level taxonomy to ORF IDs via the BED file from module 2.
+Taxonomic annotation of assembled contigs against the GTDB database using MMseqs2 taxonomy, at the contig level only.
 
 If the GTDB database is absent at `--gtdb`, it is downloaded automatically via `mmseqs databases GTDB`.
 
@@ -398,7 +398,7 @@ mg-clust-module-4.py \
 | Parameter | Default | Description |
 |---|---|---|
 | `--contigs` | — | Assembled contigs FASTA (required) |
-| `--bed_file` | — | ORF BED file from module 2; used to map ORF IDs to contig taxonomy (required) |
+| `--bed_file` | — | ORF BED file from module 2 (required); currently only existence-checked, not joined against contig taxonomy |
 | `--sample_name` | — | Sample name used to prefix output files (required) |
 | `--output_dir` | — | Output directory (required) |
 | `--gtdb` | `~/.mg-clust/db/gtdb/gtdb` | MMseqs2 GTDB taxonomy database prefix |
@@ -411,7 +411,6 @@ mg-clust-module-4.py \
 **Outputs (inside `<sample_name>/`):**
 - `<sample_name>_contig_tax_annot.tsv` — per-contig taxonomy (columns: `contig_id`, `taxid`, `rank`, `name`, `lineage`)
 - `<sample_name>_contig_tax_report.txt` — Kraken-style taxonomy report
-- `<sample_name>_orf_tax_annot.tsv` — per-ORF taxonomy via left join on BED file (columns: `orf_id`, `taxid`, `rank`, `name`, `lineage`)
 
 ---
 
@@ -456,15 +455,15 @@ mg-clust-module-5.py \
 
 > Stop after this module with `--stop_at_module 6` (default). Runs once after all samples complete.
 
-Concatenates per-sample coverage, taxonomy, and functional annotation tables across all samples, then joins them with the cluster membership table from module 3 using DuckDB to produce per-OPU abundance tables annotated with taxonomy and function.
+Concatenates per-sample coverage tables and LEFT JOINs them onto the cluster membership table from module 3 (`clust_tsv` is the driving table: an ORF with coverage but absent from `clust_tsv` — e.g. filtered out upstream by module 3 — is silently excluded, not kept with zero coverage) to produce a per-ORF abundance table, then collapses that by summing coverage per sample and OPU into the primary abundance table. Taxonomy and functional annotation files, if given, are only concatenated into their own standalone tables — they are **not** joined against the coverage/OPU tables.
 
 ```bash
 mg-clust-module-6.py \
     --meancov_files   <s1_orfs_meancov.tsv> <s2_...> ... \
     --readscov_files  <s1_orfs_readscov.tsv> <s2_...> ... \
     --clust_tsv       <orfs_clust-minlen60aa-id70perc.tsv> \
-    [--tax_annot_files <s1_orf_tax_annot.tsv> <s2_...> ...] \
-    [--fun_annot_files <s1_orf_fun_annot.tsv> <s2_...> ...] \
+    [--tax_annot_files <s1_contig_tax_annot.tsv> <s2_...> ...] \
+    [--fun_annot_files <s1_orfs-minlen60aa-fun_annot.tsv> <s2_...> ...] \
     --clust_thres     0.7 \
     --output_dir      <output_dir> \
     [--overwrite]
@@ -475,8 +474,8 @@ mg-clust-module-6.py \
 | `--meancov_files` | — | Per-sample mean coverage TSV files from module 2 (required) |
 | `--readscov_files` | — | Per-sample read count TSV files from module 2 (required) |
 | `--clust_tsv` | — | Cluster membership TSV from module 3 (required) |
-| `--tax_annot_files` | omitted | Per-sample taxonomy TSVs from module 4; omit when `--skip_tax_annot true` |
-| `--fun_annot_files` | omitted | Per-sample function TSVs from module 5; omit when `--skip_fun_annot true` |
+| `--tax_annot_files` | omitted | Per-sample contig taxonomy TSVs from module 4; omit when `--skip_tax_annot true`. Concatenated only, not joined against coverage |
+| `--fun_annot_files` | omitted | Per-sample function TSVs from module 5; omit when `--skip_fun_annot true`. Concatenated only, not joined against coverage |
 | `--clust_thres` | `0.7` | Clustering threshold used in module 3; used to name the output file |
 | `--output_dir` | — | Output directory (required) |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
@@ -484,10 +483,10 @@ mg-clust-module-6.py \
 **Outputs (always produced):**
 - `orfs_meancov.tsv` — concatenated mean coverage table across all samples
 - `orfs_readscov.tsv` — concatenated read count table across all samples
-- `orfs_clust-minlen<N>aa-id<N>perc-coverage.tsv` — per-ORF coverage joined with cluster membership
-- `orfs_clust-minlen<N>aa-id<N>perc-collapsed_coverage.tsv` — coverage summed per OPU per sample (the primary abundance table)
+- `orfs_clust-minlen<N>aa-id<N>perc-coverage.tsv` — per-ORF coverage left-joined onto cluster membership (columns: `sample_name`, `opu_id`, `orf_id`, `read_coverage`, `mean_coverage`)
+- `orfs_clust-minlen<N>aa-id<N>perc-collapsed_coverage.tsv` — coverage summed per OPU per sample (the primary abundance table; columns: `sample_name`, `opu_id`, `read_coverage`, `mean_coverage`)
 
-**Outputs (conditional):**
+**Outputs (conditional, standalone — not merged with the abundance tables above):**
 - `contigs_tax_annot.tsv` — concatenated taxonomy annotations across all samples (only when `--skip_tax_annot` is not set)
 - `orfs-minlen<N>aa-fun_annot.tsv` — concatenated functional annotations across all samples (only when `--skip_fun_annot` is not set)
 
@@ -525,7 +524,6 @@ Two key parameters — minimum ORF length (`--min_orf_len`) and clustering ident
             <sample_name>/
                 <sample_name>_contig_tax_annot.tsv
                 <sample_name>_contig_tax_report.txt
-                <sample_name>_orf_tax_annot.tsv
         module-5/
             <sample_name>/
                 orfs_ko_domtblout.txt

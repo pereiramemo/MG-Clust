@@ -9,7 +9,9 @@ where dependencies are available on PATH.
 - Runs mmseqs taxonomy against a GTDB database to assign taxonomy to each contig
 - Exports the per-contig taxonomy assignments as a TSV file
 - Generates a Kraken-style taxonomy report
-- Maps ORF IDs to contig-level taxonomy via a left join on the BED file
+
+Note: --bed_file is optional and currently unused; taxonomy is reported at the
+contig level only, no per-ORF join is produced.
 """
 
 ###############################################################################
@@ -44,8 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contigs", dest="contigs", required=True,
         help="input contigs fasta file (nucleotide sequences)")
 
-    parser.add_argument("--bed_file", dest="bed_file", required=True,
-        help="ORF BED file from module 2 (*_orfs.bed); used to map ORF IDs to contig taxonomy")
+    parser.add_argument("--bed_file", dest="bed_file", default=None,
+        help="ORF BED file from module 2 (*_orfs.bed); accepted for compatibility but "
+             "currently unused -- taxonomy is reported at the contig level only, no "
+             "per-ORF join is produced (default: None)")
 
     parser.add_argument("--gtdb", dest="gtdb", default=GTDB_DEFAULT,
         help=f"path to the MMseqs2 GTDB taxonomy database (default: {GTDB_DEFAULT})")
@@ -88,7 +92,8 @@ def main() -> None:
     ###########################################################################
 
     check_file(args.contigs, "contigs fasta file")
-    check_file(args.bed_file, "ORF BED file")
+    if args.bed_file:
+        check_file(args.bed_file, "ORF BED file")
 
     ###########################################################################
     # 3.2. Check GTDB database; download if absent
