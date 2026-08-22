@@ -2,7 +2,7 @@
 
 // Include modules
 include { MODULE1; MODULE1_ASSEMBLY_ONLY; MODULE1_PRECOMPUTED } from './modules/mg-clust-module-1.nf'
-include { MODULE2 } from './modules/mg-clust-module-2.nf'
+include { MODULE2; MODULE2_PRECOMPUTED } from './modules/mg-clust-module-2.nf'
 include { MODULE3 } from './modules/mg-clust-module-3.nf'
 include { MODULE4 } from './modules/mg-clust-module-4.nf'
 include { MODULE5 } from './modules/mg-clust-module-5.nf'
@@ -22,15 +22,17 @@ workflow {
           --nslots          INT   CPU threads per tool (default: ${params.nslots})
           --stop_at_module  INT   Stop after module N, 1-6 (default: ${params.stop_at_module})
           --full_output     BOOL  Publish all intermediate outputs (default: ${params.full_output})
+          --publish_mode    STR   publishDir mode: copy | symlink | rellink | link | move (default: ${params.publish_mode})
           --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: ${params.skip_tax_annot})
           --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: ${params.skip_fun_annot})
           --maxForks        INT   Max parallel process instances (default: ${params.maxForks})
 
-        Input mode (selects which TSV samplesheet MODULE1 reads):
-          --input_mode          STR  from_reads | from_assembly | from_bam (default: ${params.input_mode})
-          --from_reads_tsv       TSV  [from_reads]     sample_name, reads1, reads2           (default: ${params.from_reads_tsv})
-          --from_assembly_tsv    TSV  [from_assembly]  sample_name, assembly, reads1, reads2  (default: ${params.from_assembly_tsv})
-          --from_bam_tsv         TSV  [from_bam]       sample_name, assembly, bam             (default: ${params.from_bam_tsv})
+        Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
+          --input_mode          STR  from_reads | from_assembly | from_bam | from_orfs (default: ${params.input_mode})
+          --from_reads_tsv       TSV  [from_reads]     sample_name, reads1, reads2                      (default: ${params.from_reads_tsv})
+          --from_assembly_tsv    TSV  [from_assembly]  sample_name, assembly, reads1, reads2             (default: ${params.from_assembly_tsv})
+          --from_bam_tsv         TSV  [from_bam]       sample_name, assembly, bam                        (default: ${params.from_bam_tsv})
+          --from_orfs_tsv        TSV  [from_orfs]      sample_name, assembly, bam, orfs_faa, orfs_bed    (default: ${params.from_orfs_tsv})
 
         MODULE1 — Assembly:
           --assem_preset    STR   MEGAHIT preset (default: ${params.assem_preset})
@@ -75,20 +77,25 @@ workflow {
     // a fully precomputed assembly + BAM per sample -- selected by --input_mode
     // (always runs)
     if (params.input_mode == "from_reads") {
+
         reads_ch = channel.fromPath(params.from_reads_tsv, checkIfExists: true)
             .splitCsv(header: true, sep: '\t')
             .map { row -> tuple(row.sample_name,
                                  file(row.reads1, checkIfExists: true),
                                  file(row.reads2, checkIfExists: true)) }
 
-        log.info "Pipeline will run MODULE1 assembly + mapping on ${reads_ch.size()} samples from ${params.from_reads_tsv}"
+        n_samples = file(params.from_reads_tsv).readLines().size() - 1
+        log.info "Pipeline will run MODULE1 assembly + mapping on ${n_samples} samples from ${params.from_reads_tsv}"
+        log.info "Outputs will be written to ${params.output_dir}"
         module1_out = MODULE1(reads_ch)
+
     } else if (params.input_mode == "from_assembly") {
         if (!params.from_assembly_tsv) {
             error "--from_assembly_tsv is required when --input_mode is 'from_assembly' " +
                   "(TSV columns: sample_name, assembly, reads1, reads2)"
         }
         log.info "Using precomputed assembly + reads input from ${params.from_assembly_tsv} (skipping MODULE1 assembly, still mapping)"
+        log.info "Outputs will be written to ${params.output_dir}"
 
         assembly_reads_ch = channel.fromPath(params.from_assembly_tsv, checkIfExists: true)
             .splitCsv(header: true, sep: '\t')
@@ -104,6 +111,7 @@ workflow {
                   "(TSV columns: sample_name, assembly, bam)"
         }
         log.info "Using precomputed assembly + bam input from ${params.from_bam_tsv} (skipping MODULE1 assembly/mapping)"
+        log.info "Outputs will be written to ${params.output_dir}"
 
         module1_in_ch = channel.fromPath(params.from_bam_tsv, checkIfExists: true)
             .splitCsv(header: true, sep: '\t')
@@ -112,13 +120,44 @@ workflow {
                                  file(row.bam, checkIfExists: true)) }
 
         module1_out = MODULE1_PRECOMPUTED(module1_in_ch)
+    } else if (params.input_mode == "from_orfs") {
+        if (!params.from_orfs_tsv) {
+            error "--from_orfs_tsv is required when --input_mode is 'from_orfs' " +
+                  "(TSV columns: sample_name, assembly, bam, orfs_faa, orfs_bed)"
+        }
+        log.info "Using precomputed assembly + bam + ORFs input from ${params.from_orfs_tsv} " +
+                 "(skipping MODULE1 assembly/mapping and MODULE2 ORF prediction)"
+        log.info "Outputs will be written to ${params.output_dir}"
+        
+        module1_in_ch = channel.fromPath(params.from_orfs_tsv, checkIfExists: true)
+            .splitCsv(header: true, sep: '\t')
+            .map { row -> tuple(row.sample_name,
+                                 file(row.assembly, checkIfExists: true),
+                                 file(row.bam, checkIfExists: true)) }
+
+        module1_out = MODULE1_PRECOMPUTED(module1_in_ch)
+
+        precomputed_orfs_ch = channel.fromPath(params.from_orfs_tsv, checkIfExists: true)
+            .splitCsv(header: true, sep: '\t')
+            .map { row -> tuple(row.sample_name,
+                                 file(row.orfs_faa, checkIfExists: true),
+                                 file(row.orfs_bed, checkIfExists: true)) }
     } else {
-        error "Unknown --input_mode '${params.input_mode}'; expected one of: from_reads, from_assembly, from_bam"
+        error "Unknown --input_mode '${params.input_mode}'; expected one of: from_reads, from_assembly, from_bam, from_orfs"
     }
 
-    // MODULE2: ORF prediction + coverage estimation (per sample)
+    // MODULE2: ORF prediction + coverage estimation (per sample), or -- when
+    // --input_mode from_orfs supplied orfs.faa/orfs.bed directly -- staging of
+    // those precomputed files plus fresh coverage estimation only
     if (stop >= 2) {
-        module2_out = MODULE2(module1_out)
+        if (params.input_mode == "from_orfs") {
+            module2_in_ch = module1_out
+                .map { sample_name, _assembly, bam -> tuple(sample_name, bam) }
+                .join(precomputed_orfs_ch, by: 0) // -> tuple(sample_name, bam, orfs_faa, orfs_bed)
+            module2_out = MODULE2_PRECOMPUTED(module2_in_ch)
+        } else {
+            module2_out = MODULE2(module1_out)
+        }
     }
 
     // MODULE3: Concatenate samples, filter ORFs, create MMseqs2 DB, cluster ORFs
