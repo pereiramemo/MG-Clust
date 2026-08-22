@@ -13,6 +13,11 @@ where dependencies are available on PATH.
   (streams both inputs instead of loading the BAM into memory)
 - Computes the number of reads per ORF using bedtools coverage
 - Computes mean depth per ORF using bedtools coverage -mean
+
+Alternatively, --precomputed_orfs_faa + --precomputed_orfs_bed can be given
+together to skip FragGeneScanRs and the .out-to-BED conversion entirely, staging
+the given files in place of those steps' outputs; --assembly_file is then unused
+(coverage estimation only needs --bam_file and the ORF BED file either way).
 """
 
 ###############################################################################
@@ -49,11 +54,22 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--help", action="help", help="print this help")
 
-    parser.add_argument("--assembly_file", dest="assembly_file", required=True,
-        help="input assembled metagenome (fasta format)")
+    parser.add_argument("--assembly_file", dest="assembly_file", default=None,
+        help="input assembled metagenome (fasta format); required unless both "
+             "--precomputed_orfs_faa and --precomputed_orfs_bed are given")
 
     parser.add_argument("--bam_file", dest="bam_file", required=True,
         help="bam input file (reads mapped to contigs)")
+
+    parser.add_argument("--precomputed_orfs_faa", dest="precomputed_orfs_faa", default=None,
+        help="path to a precomputed ORF protein FASTA; skips FragGeneScanRs. Must "
+             "be combined with --precomputed_orfs_bed (default: None)")
+
+    parser.add_argument("--precomputed_orfs_bed", dest="precomputed_orfs_bed", default=None,
+        help="path to a precomputed ORF BED file (contig_id, start(0-based), end, "
+             "strand, orf_id) matching --precomputed_orfs_faa; skips the "
+             ".out-to-BED conversion step. Must be combined with "
+             "--precomputed_orfs_faa (default: None)")
 
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads used (default: 4)")
@@ -96,25 +112,50 @@ def main() -> None:
     check_tools([fraggenescan, bedtools, samtools])
     args = parse_args()
 
+    precomputed_orfs_faa = args.precomputed_orfs_faa
+    precomputed_orfs_bed = args.precomputed_orfs_bed
+    assembly_file = args.assembly_file
+    bam_file = args.bam_file
+    output_dir = args.output_dir
+    overwrite = args.overwrite
+    sample_name = args.sample_name
+    nslots = args.nslots
+    train_file_name = args.train_file_name
+
+    have_precomputed_orfs = bool(precomputed_orfs_faa and precomputed_orfs_bed)
+
+    if bool(precomputed_orfs_faa) != bool(precomputed_orfs_bed):
+        print("--precomputed_orfs_faa and --precomputed_orfs_bed must be given together",
+              file=sys.stderr)
+        sys.exit(1)
+    if not have_precomputed_orfs and not assembly_file:
+        print("--assembly_file is required unless both --precomputed_orfs_faa and "
+              "--precomputed_orfs_bed are given", file=sys.stderr)
+        sys.exit(1)
+
     ###########################################################################
     # 3.1. Check mandatory files
     ###########################################################################
 
-    check_file(args.assembly_file, "input assembly file")
-    check_file(args.bam_file, "input bam file")
+    if have_precomputed_orfs:
+        check_file(precomputed_orfs_faa, "precomputed ORF protein FASTA")
+        check_file(precomputed_orfs_bed, "precomputed ORF BED file")
+    else:
+        check_file(assembly_file, "input assembly file")
+    check_file(bam_file, "input bam file")
 
     ###########################################################################
     # 3.2. Check output directory
     ###########################################################################
 
-    if os.path.isdir(args.output_dir):
-        if not args.overwrite:
-            print(f"{args.output_dir} already exists; use --overwrite to overwrite")
+    if os.path.isdir(output_dir):
+        if not overwrite:
+            print(f"{output_dir} already exists; use --overwrite to overwrite")
             sys.exit(0)
         try:
-            shutil.rmtree(args.output_dir)
+            shutil.rmtree(output_dir)
         except Exception:
-            print(f"rm -r output directory {args.output_dir} failed", file=sys.stderr)
+            print(f"rm -r output directory {output_dir} failed", file=sys.stderr)
             sys.exit(1)
 
     ###########################################################################
@@ -122,70 +163,87 @@ def main() -> None:
     ###########################################################################
 
     try:
-        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
     except Exception:
-        print(f"mkdir output directory {args.output_dir} failed", file=sys.stderr)
+        print(f"mkdir output directory {output_dir} failed", file=sys.stderr)
         sys.exit(1)
 
-    ###########################################################################
-    # 3.4. Predict ORFs
-    ###########################################################################
+    faa_file = os.path.join(output_dir, f"{sample_name}_orfs.faa")
+    bed_file = os.path.join(output_dir, f"{sample_name}_orfs.bed")
 
-    try:
-        run(
-            [
-                fraggenescan,
-                "-s", args.assembly_file,
-                "-o", os.path.join(args.output_dir, f"{args.sample_name}_orfs"),
-                "-w", "0",
-                "--unordered",  
-                "-p", str(args.nslots),
-                "-t", args.train_file_name
-            ]
-        )
-    except subprocess.CalledProcessError:
-        print("FragGeneScan failed", file=sys.stderr)
-        sys.exit(1)
+    if have_precomputed_orfs:
 
-    ###########################################################################
-    # 3.5. Create BED file
-    ###########################################################################
+        ###########################################################################
+        # 3.4. Stage precomputed ORFs (skip FragGeneScanRs + BED conversion)
+        ###########################################################################
 
-    out_file = os.path.join(args.output_dir, f"{args.sample_name}_orfs.out")
-    bed_file = os.path.join(args.output_dir, f"{args.sample_name}_orfs.bed")
+        try:
+            shutil.copyfile(precomputed_orfs_faa, faa_file)
+            shutil.copyfile(precomputed_orfs_bed, bed_file)
+        except Exception as exc:
+            print(f"Staging precomputed ORF files failed: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    # check that .out file was created
-    check_file(out_file, "FragGeneScan output .out file")
+    else:
 
-    # Parse .out file and create BED file
-    # .out format: contig_id    start    end    strand    ...
-    # BED format: contig_id, start-1 (zero-based), end (one-based)
+        ###########################################################################
+        # 3.4. Predict ORFs
+        ###########################################################################
 
-    try:
-        with open(out_file, "r", encoding="utf-8") as fh_in, \
-             open(bed_file, "w", encoding="utf-8") as fh_out:
-            first_data_line = True
-            for line in fh_in:
-                if line.startswith("#") or not line.strip():
-                    continue
-                if first_data_line:
-                    if not line.startswith(">"):
-                        print(f"Unexpected format in {out_file}: \n"
-                              f"first line does not start with '>'", file=sys.stderr)
-                        sys.exit(1)
-                    first_data_line = False
-                parts = line.strip().split("\t")
-                if re.match(r"^>(.+)$", parts[0]):
-                    contig_id = parts[0][1:]  # remove leading '>'
-                if not re.match(r"^>(.+)$", parts[0]) and len(parts) >= 3:
-                    start = int(parts[0])
-                    end = int(parts[1])
-                    strand = parts[2]
-                    orf_id = f"{contig_id}_{start}_{end}_{strand}"
-                    fh_out.write(f"{contig_id}\t{start - 1}\t{end}\t{strand}\t{orf_id}\n")
-    except Exception as exc:
-        print(f"Creating bed file failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        try:
+            run(
+                [
+                    fraggenescan,
+                    "-s", assembly_file,
+                    "-o", os.path.join(output_dir, f"{sample_name}_orfs"),
+                    "-w", "0",
+                    "--unordered",
+                    "-p", str(nslots),
+                    "-t", train_file_name
+                ]
+            )
+        except subprocess.CalledProcessError:
+            print("FragGeneScan failed", file=sys.stderr)
+            sys.exit(1)
+
+        ###########################################################################
+        # 3.5. Create BED file
+        ###########################################################################
+
+        out_file = os.path.join(output_dir, f"{sample_name}_orfs.out")
+
+        # check that .out file was created
+        check_file(out_file, "FragGeneScan output .out file")
+
+        # Parse .out file and create BED file
+        # .out format: contig_id    start    end    strand    ...
+        # BED format: contig_id, start-1 (zero-based), end (one-based)
+
+        try:
+            with open(out_file, "r", encoding="utf-8") as fh_in, \
+                 open(bed_file, "w", encoding="utf-8") as fh_out:
+                first_data_line = True
+                for line in fh_in:
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    if first_data_line:
+                        if not line.startswith(">"):
+                            print(f"Unexpected format in {out_file}: \n"
+                                  f"first line does not start with '>'", file=sys.stderr)
+                            sys.exit(1)
+                        first_data_line = False
+                    parts = line.strip().split("\t")
+                    if re.match(r"^>(.+)$", parts[0]):
+                        contig_id = parts[0][1:]  # remove leading '>'
+                    if not re.match(r"^>(.+)$", parts[0]) and len(parts) >= 3:
+                        start = int(parts[0])
+                        end = int(parts[1])
+                        strand = parts[2]
+                        orf_id = f"{contig_id}_{start}_{end}_{strand}"
+                        fh_out.write(f"{contig_id}\t{start - 1}\t{end}\t{strand}\t{orf_id}\n")
+        except Exception as exc:
+            print(f"Creating bed file failed: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     ###########################################################################
     # 3.6. Build bedtools genome file from BAM header
@@ -194,10 +252,10 @@ def main() -> None:
     # The genome file's chromosome order is derived directly from the same BAM
     # that bedtools coverage -sorted will scan below, so it is guaranteed by
     # construction to match that BAM's coordinate-sort order.
-    genome_file = os.path.join(args.output_dir, f"{args.sample_name}_genome.txt")
+    genome_file = os.path.join(output_dir, f"{sample_name}_genome.txt")
     try:
         header = subprocess.run(
-            [samtools, "view", "-H", args.bam_file],
+            [samtools, "view", "-H", bam_file],
             capture_output=True, text=True, check=False
         )
         if header.returncode != 0:
@@ -219,7 +277,7 @@ def main() -> None:
     # bedtools coverage -sorted requires -a and -b to follow the same chromosome
     # order as -g; this sorts the BED side, while the BAM side is already
     # guaranteed by construction since module 1's samtools sort produced it.
-    sorted_bed_file = os.path.join(args.output_dir, f"{args.sample_name}_orfs_sorted.bed")
+    sorted_bed_file = os.path.join(output_dir, f"{sample_name}_orfs_sorted.bed")
     try:
         run([bedtools, "sort", "-i", bed_file, "-g", genome_file], stdout_path=sorted_bed_file)
     except subprocess.CalledProcessError:
@@ -232,12 +290,12 @@ def main() -> None:
 
     # Run bedtools coverage -counts to get read counts per ORF
     # -sorted -g lets bedtools stream both inputs instead of loading the BAM into memory
-    bedtool_reads = os.path.join(args.output_dir, f"{args.sample_name}_orfs_readscov.tsv")
+    bedtool_reads = os.path.join(output_dir, f"{sample_name}_orfs_readscov.tsv")
     try:
         run(
             [bedtools, "coverage",
              "-a", sorted_bed_file,
-             "-b", args.bam_file,
+             "-b", bam_file,
              "-counts",
              "-sorted",
              "-g", genome_file],
@@ -252,10 +310,10 @@ def main() -> None:
     ###########################################################################
 
     # Run bedtools coverage -mean to get mean depth per ORF
-    bedtools_mean = os.path.join(args.output_dir, f"{args.sample_name}_orfs_meancov.tsv")
+    bedtools_mean = os.path.join(output_dir, f"{sample_name}_orfs_meancov.tsv")
     try:
         run(
-            [bedtools, "coverage", "-a", sorted_bed_file, "-b", args.bam_file, "-mean",
+            [bedtools, "coverage", "-a", sorted_bed_file, "-b", bam_file, "-mean",
              "-sorted", "-g", genome_file],
             stdout_path=bedtools_mean
         )
@@ -267,8 +325,8 @@ def main() -> None:
     # 3.10. Add sample names to mean coverage and read counts tables
     ###########################################################################
 
-    add_sample(bedtool_reads, args.sample_name)
-    add_sample(bedtools_mean, args.sample_name)
+    add_sample(bedtool_reads, sample_name)
+    add_sample(bedtools_mean, sample_name)
 
     ###########################################################################
     # 3.11. Write output log and exit

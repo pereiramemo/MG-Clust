@@ -115,15 +115,16 @@ nextflow run mg-clust.nf --from_reads_tsv data/reads.tsv --output_dir results
 
 ## Input
 
-MG-Clust reads a **TSV samplesheet** rather than scanning a directory. Which samplesheet it reads — and how much of module 1 (assembly + read mapping) actually runs — is selected with `--input_mode`. Each mode has its own `--*_tsv` parameter and column layout, so you can bring your own precomputed assembly and/or BAM instead of re-running MEGAHIT/BWA-MEM:
+MG-Clust reads a **TSV samplesheet** rather than scanning a directory. Which samplesheet it reads — and how much of module 1 (assembly + read mapping) and module 2 (ORF prediction) actually run — is selected with `--input_mode`. Each mode has its own `--*_tsv` parameter and column layout, so you can bring your own precomputed assembly, BAM, and/or ORFs instead of re-running MEGAHIT/BWA-MEM/FragGeneScanRs:
 
-| `--input_mode` | TSV parameter | TSV columns | What MODULE1 does |
+| `--input_mode` | TSV parameter | TSV columns | What runs |
 |---|---|---|---|
-| `from_reads` (default) | `--from_reads_tsv` | `sample_name`, `reads1`, `reads2` | MEGAHIT assembly + BWA-MEM mapping (full module 1) |
-| `from_assembly` | `--from_assembly_tsv` | `sample_name`, `assembly`, `reads1`, `reads2` | Skip MEGAHIT, reuse the given assembly; still run BWA-MEM mapping against it |
-| `from_bam` | `--from_bam_tsv` | `sample_name`, `assembly`, `bam` | Skip MEGAHIT and BWA-MEM entirely; reheader the given BAM so its contig names match the sample-prefixed assembly |
+| `from_reads` (default) | `--from_reads_tsv` | `sample_name`, `reads1`, `reads2` | MEGAHIT assembly + BWA-MEM mapping (full module 1); ORF prediction (module 2) |
+| `from_assembly` | `--from_assembly_tsv` | `sample_name`, `assembly`, `reads1`, `reads2` | Skip MEGAHIT, reuse the given assembly; still run BWA-MEM mapping against it; ORF prediction (module 2) |
+| `from_bam` | `--from_bam_tsv` | `sample_name`, `assembly`, `bam` | Skip MEGAHIT and BWA-MEM entirely; reheader the given BAM so its contig names match the sample-prefixed assembly; ORF prediction (module 2) |
+| `from_orfs` | `--from_orfs_tsv` | `sample_name`, `assembly`, `bam`, `orfs_faa`, `orfs_bed` | Skip MEGAHIT/BWA-MEM (like `from_bam`) **and** module 2's ORF prediction — the given `orfs_faa`/`orfs_bed` are staged directly; only coverage is (re-)computed from `bam` |
 
-Only the TSV matching the active `--input_mode` is read; the other two `--*_tsv` params are ignored.
+Only the TSV matching the active `--input_mode` is read; the other `--*_tsv` params are ignored.
 
 ```
 # --from_reads_tsv
@@ -138,11 +139,15 @@ sample1        data/assemblies/sample1.contigs.fa  data/reads/sample1_R1.fastq  
 # --from_bam_tsv
 sample_name    assembly                            bam
 sample1        data/assemblies/sample1.contigs.fa  data/bams/sample1_sorted.bam
+
+# --from_orfs_tsv
+sample_name    assembly                            bam                            orfs_faa                    orfs_bed
+sample1        data/assemblies/sample1.contigs.fa  data/bams/sample1_sorted.bam   data/orfs/sample1_orfs.faa  data/orfs/sample1_orfs.bed
 ```
 
-> The BAM supplied via `from_bam` must already be coordinate-sorted and contain only reads mapped to the paired `assembly` file — module 1 validates the sort order and rewrites `@SQ` contig names to match the sample-prefixed assembly, but does not re-run mapping, filtering, or deduplication.
+> The BAM supplied via `from_bam`/`from_orfs` must already be coordinate-sorted and contain only reads mapped to the paired `assembly` file — module 1 validates the sort order and rewrites `@SQ` contig names to match the sample-prefixed assembly, but does not re-run mapping, filtering, or deduplication. For `from_orfs`, `orfs_faa`/`orfs_bed` must have been generated from that same sample-prefixed assembly (e.g. from a prior pipeline run's module 2 output) — contig/ORF IDs are trusted as-is, not re-validated against the assembly.
 
-Working example TSVs for all three modes ship in `test/data/` (`from_reads.tsv`, `from_assembly.tsv`, `from_bam.tsv`).
+Working example TSVs for all four modes ship in `test/data/` (`from_reads.tsv`, `from_assembly.tsv`, `from_bam.tsv`, `from_orfs.tsv`).
 
 ## Parameters
 
@@ -158,15 +163,17 @@ General:
   --nslots          INT   CPU threads per tool (default: 16)
   --stop_at_module  INT   Stop after module N, 1-6 (default: 6)
   --full_output     BOOL  Publish all intermediate outputs (default: true)
+  --publish_mode    STR   publishDir mode: copy | symlink | rellink | link | move (default: copy)
   --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: false)
   --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: false)
   --maxForks        INT   Max parallel process instances (default: 3)
 
-Input mode (selects which TSV samplesheet MODULE1 reads):
-  --input_mode          STR  from_reads | from_assembly | from_bam (default: from_reads)
-  --from_reads_tsv       TSV  [from_reads]     sample_name, reads1, reads2           (default: ./test/data/from_reads.tsv)
-  --from_assembly_tsv    TSV  [from_assembly]  sample_name, assembly, reads1, reads2  (default: null)
-  --from_bam_tsv         TSV  [from_bam]       sample_name, assembly, bam             (default: null)
+Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
+  --input_mode          STR  from_reads | from_assembly | from_bam | from_orfs (default: from_reads)
+  --from_reads_tsv       TSV  [from_reads]     sample_name, reads1, reads2                      (default: ./test/data/from_reads.tsv)
+  --from_assembly_tsv    TSV  [from_assembly]  sample_name, assembly, reads1, reads2             (default: null)
+  --from_bam_tsv         TSV  [from_bam]       sample_name, assembly, bam                        (default: null)
+  --from_orfs_tsv        TSV  [from_orfs]      sample_name, assembly, bam, orfs_faa, orfs_bed    (default: null)
 
 MODULE1 — Assembly:
   --assem_preset    STR   MEGAHIT preset (default: meta-sensitive)
@@ -188,9 +195,12 @@ MODULE4 — Taxonomic annotation (GTDB):
   --tax_lineage     INT   MMseqs2 --tax-lineage flag (default: 1)
 
 MODULE5 — Functional annotation (KO HMMs):
-  --hmm_db          PATH  KO HMM profiles file (default: ~/.mg-clust/db/ko/ko_profiles.hmm)
+  --hmm_db          PATH  HMM profiles file (default: ~/.mg-clust/db/ko/ko_profiles.hmm)
+  --db_mode         STR   ko | ga | evalue scoring strategy (default: ko)
+  --ko_list         PATH  KOfam adaptive threshold file, --db_mode ko only (default: ~/.mg-clust/db/ko/ko_list.tsv)
   --evalue_thres    NUM   E-value threshold (default: 1e-3)
-  --cut_ga          BOOL  Use per-profile GA cutoffs (default: false)
+  --edge_tol        INT   aa tolerance for truncated-ORF rescue, --db_mode ko only (default: 3)
+  --relax_evalue_factor NUM  E-value tightening factor for rescued hits, --db_mode ko only (default: 100)
 ```
 
 ## Partial execution
@@ -246,7 +256,7 @@ nextflow run mg-clust.nf --skip_fun_annot true
 
 > Stop after this module with `--stop_at_module 1`.
 
-De novo assembly of paired-end reads and mapping back to the assembly. Supports three input combinations, matching the pipeline's three `--input_mode` values described above:
+De novo assembly of paired-end reads and mapping back to the assembly. Supports three input combinations (the pipeline's `from_bam` and `from_orfs` `--input_mode` values both map to the same "precomputed assembly + precomputed BAM" combination here — `from_orfs` only differs one module downstream, at module 2):
 
 ```bash
 # from_reads: MEGAHIT assembly + BWA-MEM mapping
@@ -307,9 +317,14 @@ mg-clust-module-1.py \
 
 > Stop after this module with `--stop_at_module 2`.
 
-ORF prediction from assembled contigs and per-ORF coverage estimation.
+ORF prediction from assembled contigs and per-ORF coverage estimation. Alternatively,
+`--precomputed_orfs_faa` + `--precomputed_orfs_bed` can be given together to skip
+FragGeneScanRs entirely and stage those files in place of its output — only
+coverage is (re-)computed, from `--bam_file` against the given BED. `--assembly_file`
+is then unused (only needed to run FragGeneScanRs).
 
 ```bash
+# Normal mode
 mg-clust-module-2.py \
     --assembly_file   <contigs.fa> \
     --bam_file        <sorted.bam> \
@@ -318,15 +333,27 @@ mg-clust-module-2.py \
     --nslots          4 \
     --train_file_name illumina_1 \
     [--overwrite]
+
+# Precomputed-ORFs mode
+mg-clust-module-2.py \
+    --bam_file              <sorted.bam> \
+    --precomputed_orfs_faa  <sample_orfs.faa> \
+    --precomputed_orfs_bed  <sample_orfs.bed> \
+    --sample_name           <sample> \
+    --output_dir            <output_dir> \
+    --nslots                4 \
+    [--overwrite]
 ```
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--assembly_file` | — | FASTA file of assembled contigs (required) |
+| `--assembly_file` | — | FASTA file of assembled contigs; required unless both `--precomputed_orfs_faa` and `--precomputed_orfs_bed` are given |
 | `--bam_file` | — | Sorted BAM of reads mapped to contigs (required) |
+| `--precomputed_orfs_faa` | `None` | Precomputed ORF protein FASTA; skips FragGeneScanRs. Must be combined with `--precomputed_orfs_bed` |
+| `--precomputed_orfs_bed` | `None` | Precomputed ORF BED file matching `--precomputed_orfs_faa`; skips the `.out`-to-BED conversion. Must be combined with `--precomputed_orfs_faa` |
 | `--sample_name` | — | Sample name used to prefix output files (required) |
 | `--output_dir` | — | Output directory (required) |
-| `--train_file_name` | `illumina_1` | FragGeneScanRs training model |
+| `--train_file_name` | `illumina_1` | FragGeneScanRs training model; unused in precomputed-ORFs mode |
 | `--nslots` | `4` | Threads |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
@@ -398,7 +425,7 @@ mg-clust-module-4.py \
 | Parameter | Default | Description |
 |---|---|---|
 | `--contigs` | — | Assembled contigs FASTA (required) |
-| `--bed_file` | — | ORF BED file from module 2 (required); currently only existence-checked, not joined against contig taxonomy |
+| `--bed_file` | `None` | ORF BED file from module 2 (optional; accepted for compatibility but currently unused — taxonomy is reported at the contig level only) |
 | `--sample_name` | — | Sample name used to prefix output files (required) |
 | `--output_dir` | — | Output directory (required) |
 | `--gtdb` | `~/.mg-clust/db/gtdb/gtdb` | MMseqs2 GTDB taxonomy database prefix |
@@ -418,18 +445,24 @@ mg-clust-module-4.py \
 
 > Stop after this module with `--stop_at_module 5`. Runs in parallel per sample.
 
-Functional annotation of predicted ORF protein sequences against KEGG KO HMM profiles using pyHMMER. Outputs the best-scoring KO hit per ORF.
+Functional annotation of predicted ORF protein sequences against a HMM database using pyHMMER. `--db_mode` selects the scoring strategy — required, with no default:
+- `ko` — KOfam adaptive per-KO thresholds (`ko_list`), with coverage-aware rescue of truncated ORFs and an e-value-only fallback for KOs with no cross-validated threshold (nt-KOs). The only mode that consumes `--ko_list`, and the only one where `--edge_tol`/`--relax_evalue_factor` matter.
+- `ga` — per-model GA/TC/NC cutoffs embedded in the HMM file itself (e.g. Pfam-A). Not valid against KOfam, which embeds no cutoffs at all.
+- `evalue` — a single global `--evalue_thres` applied uniformly to all models.
 
-If the KO profile database is absent at `--hmm_db`, it is downloaded automatically from the KEGG FTP.
+If `--db_mode ko` is used and either `ko_profiles.hmm` (`--hmm_db`) or `ko_list` (`--ko_list`) is absent, **both** are (re-)downloaded together from KEGG so the pair can never drift out of sync. In `ga`/`evalue` mode, `--hmm_db` must already exist — it is not auto-downloaded, since it may point at a non-KOfam database.
 
 ```bash
 mg-clust-module-5.py \
     --orfs_faa      <sample_orfs.faa> \
     --sample_name   <sample> \
     --output_dir    <output_dir> \
+    --db_mode       ko \
     --hmm_db        ~/.mg-clust/db/ko/ko_profiles.hmm \
+    --ko_list       ~/.mg-clust/db/ko/ko_list.tsv \
     --evalue_thres  1e-3 \
-    [--cut_ga | --no-cut_ga] \
+    --edge_tol      3 \
+    --relax_evalue_factor 100 \
     --nslots        4 \
     [--overwrite]
 ```
@@ -439,15 +472,18 @@ mg-clust-module-5.py \
 | `--orfs_faa` | — | ORF protein sequences from module 2 (required) |
 | `--sample_name` | — | Sample name used to prefix output files (required) |
 | `--output_dir` | — | Output directory (required) |
-| `--hmm_db` | `~/.mg-clust/db/ko/ko_profiles.hmm` | Path to the KO HMM profile database |
-| `--evalue_thres` | `1e-3` | E-value threshold; acts as fallback when `--cut_ga` is enabled |
-| `--cut_ga` / `--no-cut_ga` | `--no-cut_ga` | Use per-model gathering thresholds |
+| `--db_mode` | — | `ko` \| `ga` \| `evalue` scoring strategy (required, no default) |
+| `--hmm_db` | `~/.mg-clust/db/ko/ko_profiles.hmm` | Path to the HMM profile database |
+| `--ko_list` | `~/.mg-clust/db/ko/ko_list.tsv` | KOfam adaptive threshold file; `--db_mode ko` only |
+| `--evalue_thres` | `1e-3` | Sole criterion in `--db_mode evalue`; fallback bar for nt-KOs and base guard for `--relax_evalue_factor` in `--db_mode ko`; unused in `--db_mode ga` |
+| `--edge_tol` | `3` | aa tolerance for the alignment-flush check used to detect truncated ORFs; `--db_mode ko` only |
+| `--relax_evalue_factor` | `100` | Factor by which the e-value bar is tightened for rescued truncated-ORF hits; `--db_mode ko` only |
 | `--nslots` | `4` | Threads |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
 **Outputs (inside `<sample_name>/`):**
-- `orfs_ko_domtblout.txt` — raw pyHMMER domain table
-- `<sample_name>_orf_fun_annot.tsv` — best-hit KO annotation per ORF (columns: `orf_id`, `ko_id`, `score`, `evalue`)
+- `<sample_name>_orfs-minlen<N>aa-fun_annot.tsv` — collapsed, one best KO per ORF (columns: `orf_id`, `ko_id`, `score`, `evalue`, `coverage`, `tier`; `tier` is `confident`/`rescued_partial`/`nt_ko_evalue_only` in `--db_mode ko`, or `ga_pass`/`evalue_pass` otherwise, with `coverage` left `NA` where not applicable). This is the file wired into module 6's `--fun_annot_files`.
+- `<sample_name>_orfs-minlen<N>aa-fun_annot_multi.tsv` — rich, multi-row-per-ORF sibling with every accepted (ORF, KO) pair, same columns. Published as a secondary artifact; not consumed by module 6.
 
 ---
 
@@ -526,8 +562,8 @@ Two key parameters — minimum ORF length (`--min_orf_len`) and clustering ident
                 <sample_name>_contig_tax_report.txt
         module-5/
             <sample_name>/
-                orfs_ko_domtblout.txt
                 <sample_name>_orfs-minlen60aa-fun_annot.tsv
+                <sample_name>_orfs-minlen60aa-fun_annot_multi.tsv
         module-6/
             orfs_meancov.tsv
             orfs_readscov.tsv

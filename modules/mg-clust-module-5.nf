@@ -8,7 +8,7 @@ process MODULE5 {
 
     container "ghcr.io/pereiramemo/mg-clust/module-5:latest"
     publishDir "${params.output_dir}/intermediate/",
-           mode: "copy",
+           mode: params.publish_mode,
            enabled: params.full_output.toBoolean() || params.stop_at_module == 5         
 
     tag "${sample_name}"
@@ -18,7 +18,7 @@ process MODULE5 {
 
     output:
     path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot.tsv"),       emit: fun_annot
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot_multi.tsv"), emit: fun_annot_multi
+   //  path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot_all.tsv"), emit: fun_annot_all
 
     script:
     """

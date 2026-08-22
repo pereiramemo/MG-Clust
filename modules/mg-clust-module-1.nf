@@ -8,7 +8,7 @@ process MODULE1 {
 
     container "ghcr.io/pereiramemo/mg-clust/module-1:latest"
     publishDir "${params.output_dir}/intermediate/",
-           mode: "copy",
+           mode: params.publish_mode,
            enabled: params.full_output.toBoolean() || params.stop_at_module == 1            
 
     tag "${sample_name}"
@@ -50,7 +50,7 @@ process MODULE1_PRECOMPUTED {
 
     container "ghcr.io/pereiramemo/mg-clust/module-1:latest"
     publishDir "${params.output_dir}/intermediate/",
-           mode: "copy",
+           mode: params.publish_mode,
            enabled: params.full_output.toBoolean() || params.stop_at_module == 1
 
     tag "${sample_name}"
@@ -90,7 +90,7 @@ process MODULE1_ASSEMBLY_ONLY {
 
     container "ghcr.io/pereiramemo/mg-clust/module-1:latest"
     publishDir "${params.output_dir}/intermediate/",
-           mode: "copy",
+           mode: params.publish_mode,
            enabled: params.full_output.toBoolean() || params.stop_at_module == 1
 
     tag "${sample_name}"
