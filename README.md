@@ -168,12 +168,15 @@ General:
   --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: false)
   --maxForks        INT   Max per-sample tasks run in parallel (default: 3)
 
-Threading: modules 1, 2, 4 and 5 run one task per sample -- at most
---maxForks at a time, each using --nslots threads. Modules 3 and 6 run a
-single task over all samples, so they get the whole budget the per-sample
-modules share: --maxForks x --nslots threads (3 x 16 = 48).
-Peak thread usage is --maxForks x --nslots either way; keep that at or
-below the available cores.
+Threading: modules 1, 2, 4 and 5 run one task per sample, each using
+--nslots threads; --maxForks caps each module separately, not the
+pipeline as a whole. Modules 3 and 6 run a single task over all samples,
+taking --maxForks x --nslots threads (3 x 16 = 48).
+Modules 3, 4 and 5 are independent branches of the DAG and can run at the
+same time, so requested threads may exceed --maxForks x --nslots several
+times over; only module 6 waits on everything and runs alone. The local
+executor queues tasks to stay within the machine's cores, while a cluster
+executor submits each task as its own job.
 
 Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
   --input_mode          STR  from_reads | from_assembly | from_bam | from_orfs (default: from_reads)
