@@ -31,6 +31,7 @@ process MODULE6 {
         --fun_annot_files ${fun_annot_files} \
         --clust_thres    ${params.clust_thres} \
         --min_orf_len    ${params.min_orf_len} \
+        --nslots         ${task.cpus} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')} \
         --overwrite
     """

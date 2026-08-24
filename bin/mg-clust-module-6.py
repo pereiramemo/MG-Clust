@@ -80,6 +80,9 @@ def parse_args() -> argparse.Namespace:
     )
 
 
+    parser.add_argument("--nslots", dest="nslots", type=int, default=4,
+        help="number of threads (default: 4)")
+
     parser.add_argument("--output_dir", dest="output_dir", required=True,
         help="directory to output generated data",
     )
@@ -175,6 +178,23 @@ def build_collapsed_table(
 
 
 ###############################################################################
+# 2.5 Configure DuckDB thread usage
+###############################################################################
+
+def configure_duckdb(nslots: int) -> None:
+    """Cap DuckDB's thread pool at nslots.
+
+    Left alone, DuckDB sizes its thread pool from the host's core count, which
+    ignores how many cores this task was actually allocated -- on a cluster node
+    that means oversubscribing the node.
+    """
+    try:
+        duckdb.execute(f"SET threads TO {nslots}")
+    except Exception as exc:
+        print(f"setting DuckDB threads to {nslots} failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+###############################################################################
 # 3. Define the main function
 ###############################################################################
 
@@ -238,7 +258,13 @@ def main() -> None:
         concat_tables(args.fun_annot_files, fun_annot_concat)
 
     ###########################################################################
-    # 3.5. Build unified OPU-ORF coverage table
+    # 3.6. Configure DuckDB thread usage
+    ###########################################################################
+
+    configure_duckdb(args.nslots)
+
+    ###########################################################################
+    # 3.7. Build unified OPU-ORF coverage table
     ###########################################################################
 
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
@@ -251,7 +277,7 @@ def main() -> None:
                         readscov_concat, output1_tsv)
 
     ###########################################################################
-    # 3.6. Build collapsed by sample and OPU ID coverage table
+    # 3.8. Build collapsed by sample and OPU ID coverage table
     ###########################################################################
 
     output2_tsv = os.path.join(
@@ -262,7 +288,7 @@ def main() -> None:
     build_collapsed_table(output1_tsv, output2_tsv)
 
     ########################################################################### 
-    # 3.7. Write output log and exit
+    # 3.9. Write output log and exit
     ###########################################################################
     
     print(f"{os.path.basename(__file__)} exited successfully")
