@@ -28,7 +28,7 @@ process MODULE1 {
         --reads2             ${reads2} \
         --sample_name        ${sample_name} \
         --output_dir         ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
-        --nslots             ${params.nslots} \
+        --nslots             ${task.cpus} \
         --assem_preset       ${params.assem_preset} \
         --min_contig_length  ${params.min_contig_len} \
         --min_seq            ${params.min_seq} \
@@ -70,7 +70,7 @@ process MODULE1_PRECOMPUTED {
         --precomputed_bam       ${bam} \
         --sample_name           ${sample_name} \
         --output_dir            module-1/${sample_name} \
-        --nslots                ${params.nslots} \
+        --nslots                ${task.cpus} \
         --min_seq               ${params.min_seq} \
         --overwrite
     """
@@ -111,7 +111,7 @@ process MODULE1_ASSEMBLY_ONLY {
         --reads2                ${reads2} \
         --sample_name           ${sample_name} \
         --output_dir            module-1/${sample_name} \
-        --nslots                ${params.nslots} \
+        --nslots                ${task.cpus} \
         --min_seq               ${params.min_seq} \
         --overwrite
     """

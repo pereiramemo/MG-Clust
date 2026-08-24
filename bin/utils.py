@@ -47,3 +47,4 @@ def check_file(path: str, label: str) -> None:
     if not os.path.isfile(path):
         print(f"{label} is not a real file", file=sys.stderr)
         sys.exit(1)
+

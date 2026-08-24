@@ -32,7 +32,7 @@ process MODULE5 {
         --min_orf_len   ${params.min_orf_len} \
         --edge_tol      ${params.edge_tol} \
         --relax_evalue_factor ${params.relax_evalue_factor} \
-        --nslots        ${params.nslots} \
+        --nslots        ${task.cpus} \
         --output_dir    ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --overwrite
     """

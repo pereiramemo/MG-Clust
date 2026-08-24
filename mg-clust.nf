@@ -19,13 +19,20 @@ workflow {
 
         General:
           --output_dir      DIR   Output directory (default: ${params.output_dir})
-          --nslots          INT   CPU threads per tool (default: ${params.nslots})
+          --nslots          INT   CPU threads per per-sample task (default: ${params.nslots})
           --stop_at_module  INT   Stop after module N, 1-6 (default: ${params.stop_at_module})
           --full_output     BOOL  Publish all intermediate outputs (default: ${params.full_output})
           --publish_mode    STR   publishDir mode: copy | symlink | rellink | link | move (default: ${params.publish_mode})
           --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: ${params.skip_tax_annot})
           --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: ${params.skip_fun_annot})
-          --maxForks        INT   Max parallel process instances (default: ${params.maxForks})
+          --maxForks        INT   Max per-sample tasks run in parallel (default: ${params.maxForks})
+
+        Threading: modules 1, 2, 4 and 5 run one task per sample -- at most
+        --maxForks at a time, each using --nslots threads. Modules 3 and 6 run a
+        single task over all samples, so they get the whole budget the per-sample
+        modules share: --maxForks x --nslots threads (${params.maxForks} x ${params.nslots} = ${params.maxForks * params.nslots}).
+        Peak thread usage is --maxForks x --nslots either way; keep that at or
+        below the available cores.
 
         Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
           --input_mode          STR  from_reads | from_assembly | from_bam | from_orfs (default: ${params.input_mode})

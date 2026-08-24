@@ -30,7 +30,7 @@ process MODULE2 {
         --bam_file       ${bam} \
         --sample_name    ${sample_name} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
-        --nslots         ${params.nslots} \
+        --nslots         ${task.cpus} \
         --train_file_name ${params.train_file_name} \
         --overwrite
     """
@@ -71,7 +71,7 @@ process MODULE2_PRECOMPUTED {
         --precomputed_orfs_bed ${orfs_bed} \
         --sample_name          ${sample_name} \
         --output_dir           module-2/${sample_name} \
-        --nslots               ${params.nslots} \
+        --nslots               ${task.cpus} \
         --overwrite
     """
 }

@@ -25,7 +25,7 @@ process MODULE3 {
     mg-clust-module-3.py \
         --orf_files      ${orf_files} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')} \
-        --nslots         ${params.nslots} \
+        --nslots         ${task.cpus} \
         --min_orf_len ${params.min_orf_len} \
         --clust_thres    ${params.clust_thres} \
         --clust_cov_len  ${params.clust_cov_len} \

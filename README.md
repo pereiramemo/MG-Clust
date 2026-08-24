@@ -160,13 +160,20 @@ Usage: nextflow run mg-clust.nf [options]
 
 General:
   --output_dir      DIR   Output directory (default: ./test/mg-clust-output/)
-  --nslots          INT   CPU threads per tool (default: 16)
+  --nslots          INT   CPU threads per per-sample task (default: 16)
   --stop_at_module  INT   Stop after module N, 1-6 (default: 6)
   --full_output     BOOL  Publish all intermediate outputs (default: true)
   --publish_mode    STR   publishDir mode: copy | symlink | rellink | link | move (default: copy)
   --skip_tax_annot  BOOL  Skip MODULE4 taxonomic annotation (default: false)
   --skip_fun_annot  BOOL  Skip MODULE5 functional annotation (default: false)
-  --maxForks        INT   Max parallel process instances (default: 3)
+  --maxForks        INT   Max per-sample tasks run in parallel (default: 3)
+
+Threading: modules 1, 2, 4 and 5 run one task per sample -- at most
+--maxForks at a time, each using --nslots threads. Modules 3 and 6 run a
+single task over all samples, so they get the whole budget the per-sample
+modules share: --maxForks x --nslots threads (3 x 16 = 48).
+Peak thread usage is --maxForks x --nslots either way; keep that at or
+below the available cores.
 
 Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
   --input_mode          STR  from_reads | from_assembly | from_bam | from_orfs (default: from_reads)

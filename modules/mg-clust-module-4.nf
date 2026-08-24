@@ -30,7 +30,7 @@ process MODULE4 {
         --lca_mode      ${params.lca_mode} \
         --sensitivity   ${params.sensitivity} \
         --tax_lineage   ${params.tax_lineage} \
-        --nslots        ${params.nslots} \
+        --nslots        ${task.cpus} \
         --output_dir    ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --overwrite
     """
