@@ -79,7 +79,6 @@ def parse_args() -> argparse.Namespace:
         help="minimum ORF length used to filter ORFs (default: 100)",
     )
 
-
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads (default: 4)")
 
@@ -98,11 +97,16 @@ def parse_args() -> argparse.Namespace:
 ###############################################################################
 
 def concat_tables(input_files: list[str], output_file: str) -> None:
-    """Concatenate all files in input_files into output_file."""
+    """Concatenate all files in input_files into output_file.
+
+    Inputs and output are gzipped. No decompression is needed: concatenated gzip
+    members form a valid gzip stream, so the raw byte copy below is still correct,
+    and DuckDB read_csv reads the result directly.
+    """
     try:
         with open(output_file, "wb") as out_fh:
             for in_file in input_files:
-                check_file(in_file, "coverage file")
+                check_file(in_file, f"input table {in_file}")
                 with open(in_file, "rb") as in_fh:
                     shutil.copyfileobj(in_fh, out_fh)
     except Exception as exc:
@@ -239,8 +243,8 @@ def main() -> None:
     # 3.4. Concatenate coverage files
     ###########################################################################
 
-    meancov_concat = os.path.join(args.output_dir, "orfs_meancov.tsv")
-    readscov_concat = os.path.join(args.output_dir, "orfs_readscov.tsv")
+    meancov_concat = os.path.join(args.output_dir, "orfs_meancov.tsv.gz")
+    readscov_concat = os.path.join(args.output_dir, "orfs_readscov.tsv.gz")
 
     concat_tables(args.meancov_files, meancov_concat)
     concat_tables(args.readscov_files, readscov_concat)
@@ -250,11 +254,11 @@ def main() -> None:
     ###########################################################################
     
     if args.tax_annot_files:
-        tax_annot_concat = os.path.join(args.output_dir, "contigs_tax_annot.tsv")
+        tax_annot_concat = os.path.join(args.output_dir, "contigs_tax_annot.tsv.gz")
         concat_tables(args.tax_annot_files, tax_annot_concat)
 
     if args.fun_annot_files:
-        fun_annot_concat = os.path.join(args.output_dir, f"orfs-minlen{args.min_orf_len}aa-fun_annot.tsv")
+        fun_annot_concat = os.path.join(args.output_dir, f"orfs-minlen{args.min_orf_len}aa-fun_annot.tsv.gz")
         concat_tables(args.fun_annot_files, fun_annot_concat)
 
     ###########################################################################
@@ -270,7 +274,7 @@ def main() -> None:
     clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
     output1_tsv = os.path.join(
         args.output_dir,
-        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-coverage.tsv",
+        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-coverage.tsv.gz",
     )
 
     build_unified_table(args.clust_tsv, meancov_concat, 
@@ -282,7 +286,7 @@ def main() -> None:
 
     output2_tsv = os.path.join(
         args.output_dir,
-        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-collapsed_coverage.tsv",
+        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-collapsed_coverage.tsv.gz",
     )
 
     build_collapsed_table(output1_tsv, output2_tsv)

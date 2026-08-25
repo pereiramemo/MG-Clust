@@ -35,7 +35,7 @@ import urllib.request
 import pyhmmer
 
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import check_file
+from utils import check_file, gzip_file
 
 KO_DEFAULT = os.path.join(os.path.expanduser("~"), ".mg-clust", "db", "ko", "ko_profiles.hmm")
 KO_PROFILES_URL = "https://www.genome.jp/ftp/db/kofam/profiles.tar.gz"
@@ -142,7 +142,8 @@ overwrite = True
 """
 
 ###############################################################################
-# 2.2 Fetch/cache the KO HMM profiles (unchanged download/extract/concat logic)
+# 2.2 Fetch/cache the KO HMM profiles (download/extract/concat; scratch cleaned
+#     in a finally so a failed build strands nothing)
 ###############################################################################
 
 def _fetch_ko_profiles(hmm_db: str) -> None:
@@ -150,28 +151,38 @@ def _fetch_ko_profiles(hmm_db: str) -> None:
     os.makedirs(ko_dir, exist_ok=True)
     """"""
     archive = os.path.join(ko_dir, "profiles.tar.gz")
-    print(f"Downloading KO profiles from {KO_PROFILES_URL} ...")
-    urllib.request.urlretrieve(KO_PROFILES_URL, archive)
-    """"""
-    print("Extracting profiles ...")
-    with tarfile.open(archive) as tar:
-        tar.extractall(ko_dir)
-    """"""
     profiles_dir = os.path.join(ko_dir, "profiles")
-    hmm_files = sorted(glob.glob(os.path.join(profiles_dir, "*.hmm")))
-    if not hmm_files:
-        raise RuntimeError("no .hmm files found after extraction")
-    """"""
-    print(f"Concatenating {len(hmm_files)} HMM profiles into {hmm_db} ...")
     tmp_hmm_db = hmm_db + ".tmp"
-    with open(tmp_hmm_db, "wb") as out:
-        for hmm_file in hmm_files:
-            with open(hmm_file, "rb") as f:
-                out.write(f.read())
-    os.replace(tmp_hmm_db, hmm_db)
-    """"""
-    os.remove(archive)
-    shutil.rmtree(profiles_dir)
+    # The download is ~1.5 GB and the extracted profiles/ tree is larger still. Both
+    # are scratch: only the concatenated hmm_db is kept. Clean them in a finally so an
+    # interrupted or failed build cannot strand gigabytes in the cache directory.
+    try:
+        print(f"Downloading KO profiles from {KO_PROFILES_URL} ...")
+        urllib.request.urlretrieve(KO_PROFILES_URL, archive)
+        """"""
+        print("Extracting profiles ...")
+        with tarfile.open(archive) as tar:
+            tar.extractall(ko_dir)
+        """"""
+        hmm_files = sorted(glob.glob(os.path.join(profiles_dir, "*.hmm")))
+        if not hmm_files:
+            raise RuntimeError("no .hmm files found after extraction")
+        """"""
+        print(f"Concatenating {len(hmm_files)} HMM profiles into {hmm_db} ...")
+        with open(tmp_hmm_db, "wb") as out:
+            for hmm_file in hmm_files:
+                with open(hmm_file, "rb") as f:
+                    shutil.copyfileobj(f, out)
+        os.replace(tmp_hmm_db, hmm_db)
+    finally:
+        for path in (archive, tmp_hmm_db):
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        if os.path.isdir(profiles_dir):
+            shutil.rmtree(profiles_dir, ignore_errors=True)
 
 ###############################################################################
 # 2.3 Fetch/cache the KOfam ko_list threshold file
@@ -573,7 +584,14 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.9. Write output log and exit
+    # 3.9. Compress the annotation table
+    ###########################################################################
+
+    # Consumed by module 6 via raw byte-copy concatenation and DuckDB, both gzip-safe.
+    gzip_file(best_hits_table)
+
+    ###########################################################################
+    # 3.10. Write output log and exit
     ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")

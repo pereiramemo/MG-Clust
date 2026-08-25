@@ -556,37 +556,90 @@ Two key parameters — minimum ORF length (`--min_orf_len`) and clustering ident
                 <sample_name>_sorted.bam
         module-2/
             <sample_name>/
-                <sample_name>_orfs.faa
-                <sample_name>_orfs.bed
-                <sample_name>_orfs_meancov.tsv
-                <sample_name>_orfs_readscov.tsv
+                <sample_name>_orfs.faa.gz
+                <sample_name>_orfs.bed.gz
+                <sample_name>_orfs_meancov.tsv.gz
+                <sample_name>_orfs_readscov.tsv.gz
         module-3/
-            orfs.faa
-            orfs_filt-minlen60aa.faa
+            orfs.faa.gz
+            orfs_filt-minlen60aa.faa.gz
             orfs_filt_db-minlen60aa/
             orfs_clust-minlen60aa-id70perc/
-                orfs_clust-minlen60aa-id70perc.tsv
+                orfs_clust-minlen60aa-id70perc.tsv.gz
         module-4/
             <sample_name>/
-                <sample_name>_contig_tax_annot.tsv
+                <sample_name>_contig_tax_annot.tsv.gz
                 <sample_name>_contig_tax_report.txt
         module-5/
             <sample_name>/
-                <sample_name>_orfs-minlen60aa-fun_annot.tsv
-                <sample_name>_orfs-minlen60aa-fun_annot_multi.tsv
+                <sample_name>_orfs-minlen60aa-fun_annot.tsv.gz
+                <sample_name>_orfs-minlen60aa-fun_annot_multi.tsv.gz
         module-6/
-            orfs_meancov.tsv
-            orfs_readscov.tsv
-            contigs_tax_annot.tsv                              # only when skip_tax_annot=false
-            orfs-minlen60aa-fun_annot.tsv                      # only when skip_fun_annot=false
-            orfs_clust-minlen60aa-id70perc-coverage.tsv
-            orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv
+            orfs_meancov.tsv.gz
+            orfs_readscov.tsv.gz
+            contigs_tax_annot.tsv.gz                              # only when skip_tax_annot=false
+            orfs-minlen60aa-fun_annot.tsv.gz                      # only when skip_fun_annot=false
+            orfs_clust-minlen60aa-id70perc-coverage.tsv.gz
+            orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv.gz
     workables/
-        orfs_clust-minlen60aa-id70perc-coverage.tsv           -> ../intermediate/module-6/...
-        orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv -> ../intermediate/module-6/...
-        contigs_tax_annot.tsv                                  -> ../intermediate/module-6/...  # only when skip_tax_annot=false
-        orfs-minlen60aa-fun_annot.tsv                          -> ../intermediate/module-6/...  # only when skip_fun_annot=false
+        orfs_clust-minlen60aa-id70perc-coverage.tsv.gz        -> ../intermediate/module-6/...
+        orfs_clust-minlen60aa-id70perc-collapsed_coverage.tsv.gz -> ../intermediate/module-6/...
+        contigs_tax_annot.tsv.gz                                  -> ../intermediate/module-6/...  # only when skip_tax_annot=false
+        orfs-minlen60aa-fun_annot.tsv.gz                          -> ../intermediate/module-6/...  # only when skip_fun_annot=false
 ```
+
+## Disk usage
+
+Published tables and protein FASTA are written **gzipped** (`.tsv.gz`, `.faa.gz`, `.bed.gz`).
+Nothing downstream needs decompressing: DuckDB `read_csv`, `bbduk`, `mmseqs createdb` and
+pyhmmer all read gzip directly, and concatenating gzip files with a byte copy stays valid
+because concatenated gzip members are themselves a valid gzip stream. Read them with
+`zcat`/`zless`, or in R with `read.delim(gzfile("x.tsv.gz"))`. Contigs (`.fa`) and BAMs are
+left alone — BAM is already compressed, and protein FASTA only gains ~1.9x.
+
+`--publish_mode` defaults to `copy`, which means every published file exists twice: once in
+`work/` and once in `intermediate/`. If `--output_dir` and `work/` are **on the same
+filesystem**, `--publish_mode link` removes that duplication entirely — hardlinked files
+share one inode, so the output tree costs nothing and still survives `nextflow clean`, which
+only removes the `work/` entry.
+
+Check before switching, because hardlinks cannot cross filesystems and Nextflow does **not**
+fall back to copying — it aborts the run with `Failed to publish file ... [link]`:
+
+```bash
+df --output=source <output_dir> <work_dir>   # same device? then link is safe
+```
+
+This bites on clusters, where `work/` is typically on scratch and results on home or project
+storage. `symlink`/`rellink` are cheaper still but break as soon as `work/` is cleaned.
+
+**`work/` is where the space actually goes.** Nextflow never reclaims it, and it holds every
+task's scratch across every run — routinely far larger than the published results. It is not
+cleaned automatically:
+
+```bash
+nextflow log                        # list past runs by name
+nextflow clean -f -before <run>     # drop everything before that run
+nextflow clean -f -but <run>        # keep only that run
+```
+
+Hardlinked published files survive this: removing the `work/` entry leaves the inode alive
+as long as the published copy references it.
+
+Large scratch is deleted as soon as it is dead rather than at the end of the run, so an
+interrupted or failed run does not strand it: MEGAHIT's per-kmer `intermediate_contigs/`
+goes as soon as the final contigs exist, the SAM as soon as the BAM exists, and the unsorted
+BAM as soon as it is sorted.
+
+**Database cache** (`~/.mg-clust/db/`, shared by all runs, downloaded on first use):
+
+| Database | Size | Used by |
+|---|---|---|
+| GTDB (MMseqs2 taxonomy) | ~1.1 GB | module 4 |
+| KEGG KO profiles (`ko_profiles.hmm`) | ~7.6 GB | module 5 |
+
+Roughly 9 GB in total. Build scratch (the ~1.5 GB `profiles.tar.gz` download and its
+extracted `profiles/` tree) is removed even if the build fails.
 
 ---
 

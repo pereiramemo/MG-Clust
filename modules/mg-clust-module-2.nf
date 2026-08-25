@@ -18,10 +18,10 @@ process MODULE2 {
     tuple val(sample_name), path(assembly), path(bam)
 
     output:
-    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs.faa"),          emit: faa
-    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs.bed"),          emit: bed
-    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_meancov.tsv"),  emit: meancov
-    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_readscov.tsv"), emit: readscov
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs.faa.gz"),          emit: faa
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs.bed.gz"),          emit: bed
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_meancov.tsv.gz"),  emit: meancov
+    tuple val(sample_name), path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs_readscov.tsv.gz"), emit: readscov
 
     script:
     """
@@ -58,10 +58,10 @@ process MODULE2_PRECOMPUTED {
     tuple val(sample_name), path(bam), path(orfs_faa), path(orfs_bed)
 
     output:
-    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs.faa"),          emit: faa
-    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs.bed"),          emit: bed
-    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs_meancov.tsv"),  emit: meancov
-    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs_readscov.tsv"), emit: readscov
+    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs.faa.gz"),          emit: faa
+    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs.bed.gz"),          emit: bed
+    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs_meancov.tsv.gz"),  emit: meancov
+    tuple val(sample_name), path("module-2/${sample_name}/${sample_name}_orfs_readscov.tsv.gz"), emit: readscov
 
     script:
     """

@@ -30,7 +30,7 @@ import shutil
 import sys, os
 import subprocess
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import run, check_tools, check_file
+from utils import run, check_tools, check_file, gzip_file
 
 # os, subprocess, and sys are imported in utils.py, so they are available here as well
 
@@ -329,7 +329,18 @@ def main() -> None:
     add_sample(bedtools_mean, sample_name)
 
     ###########################################################################
-    # 3.11. Write output log and exit
+    # 3.11. Compress the published outputs
+    ###########################################################################
+
+    # Done only now, after every bedtools stage has finished with the plain files.
+    # Downstream consumers all read gzip directly: module 3 (byte-copy concat, bbduk,
+    # mmseqs), module 5 (pyhmmer) and module 6 (DuckDB). The BED is accepted but
+    # unused by module 4.
+    for out_file in (faa_file, bed_file, bedtool_reads, bedtools_mean):
+        gzip_file(out_file)
+
+    ###########################################################################
+    # 3.12. Write output log and exit
     ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")

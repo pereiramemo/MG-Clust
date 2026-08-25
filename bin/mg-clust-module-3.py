@@ -5,21 +5,12 @@ mg-clust module 3: Concatenation, filtering, MMseqs2 DB creation, and ORF cluste
 Assumes execution inside the conda environment "mg-clust-module-3" (or equivalent)
 where dependencies are available on PATH.
 
-- Concatenates ORF protein sequences from all samples, prefixing each header with the sample name
+- Concatenates ORF protein sequences from all samples (raw byte copy; headers already
+  carry the `<sample_name>|` prefix applied by module 1 to the contig names)
 - Filters ORFs by minimum length using bbduk
 - Creates an MMseqs2 sequence database from the filtered ORFs
 - Clusters filtered ORFs using MMseqs2 at a given sequence identity threshold
 - Exports clustering results as a TSV table
-"""
-
-"""
-Notes:
-The script has checks that allow resuming the workflow orf files and database without 
-re-running if these already exists. However, when using nextflow, the module will be 
-re-run only if any of the input files change, and in a new independent directory, so 
-this checks are not strictly necessary. It can still be useful if the script is run 
-outside of nextflow or if the concatenated file is accidentally deleted.
- 
 """
 
 ###############################################################################
@@ -31,7 +22,7 @@ import sys, os
 import subprocess
 import shutil
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import run, check_tools
+from utils import run, check_tools, gzip_file
 
 bbduk = "bbduk.sh"
 mmseqs = "mmseqs"
@@ -104,7 +95,7 @@ def main() -> None:
     ###########################################################################
 
     try:
-        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(args.output_dir, exist_ok=False)
     except Exception:
         print(f"mkdir {args.output_dir} failed", file=sys.stderr)
         sys.exit(1)
@@ -113,13 +104,15 @@ def main() -> None:
     # 3.3. Concat ORF files
     ###########################################################################
 
-    concat_orfs = os.path.join(args.output_dir, "orfs.faa")
+    # Inputs arrive gzipped from module 2. The raw byte-copy concatenation below
+    # needs no change: concatenated gzip members are themselves a valid gzip stream,
+    # and bbduk/mmseqs both read .gz directly.
+    concat_orfs = os.path.join(args.output_dir, "orfs.faa.gz")
 
-    if not os.path.isfile(concat_orfs):
-        open(concat_orfs, "w").close()
+    with open(concat_orfs, "wb") as out_fh:
         for orf_file in args.orf_files:
             try:
-                with open(orf_file, "rb") as in_fh, open(concat_orfs, "ab") as out_fh:
+                with open(orf_file, "rb") as in_fh:
                     shutil.copyfileobj(in_fh, out_fh)
             except Exception as exc:
                 print(f"concatenating {orf_file} failed: {exc}", file=sys.stderr)
@@ -129,25 +122,23 @@ def main() -> None:
     # 3.4. Filter ORFs by length
     ###########################################################################
 
-    concat_orfs_filt = os.path.join(args.output_dir, f"orfs_filt-minlen{args.min_orf_len}aa.faa")
-    run_filter = not os.path.isfile(concat_orfs_filt)
+    concat_orfs_filt = os.path.join(args.output_dir, f"orfs_filt-minlen{args.min_orf_len}aa.faa.gz")
 
-    if run_filter:
-        try:
-            run(
-                [
-                    bbduk,
-                    f"in={concat_orfs}",
-                    f"out={concat_orfs_filt}",
-                    "overwrite=t",
-                    f"threads={args.nslots}",
-                    f"minlength={args.min_orf_len}",
-                    "amino=t"
-                ]
-            )
-        except subprocess.CalledProcessError:
-            print("bbduk failed", file=sys.stderr)
-            sys.exit(1)
+    try:
+        run(
+            [
+                bbduk,
+                f"in={concat_orfs}",
+                f"out={concat_orfs_filt}",
+                "overwrite=t",
+                f"threads={args.nslots}",
+                f"minlength={args.min_orf_len}",
+                "amino=t"
+            ]
+        )
+    except subprocess.CalledProcessError:
+        print("bbduk failed", file=sys.stderr)
+        sys.exit(1)
 
     ###########################################################################
     # 3.5. Create mmseqs database
@@ -156,39 +147,25 @@ def main() -> None:
     orfs_filt_db_dir = os.path.join(args.output_dir, f"orfs_filt_db-minlen{args.min_orf_len}aa")
     orfs_filt_db = os.path.join(orfs_filt_db_dir, "orfs_filt_db")
 
-    # .dbtype file is created by mmseqs createdb; if it doesn't exist, the DB needs to be created
-    create_db = not os.path.isfile(orfs_filt_db + ".dbtype")
+    try:
+        os.makedirs(orfs_filt_db_dir, exist_ok=False)
+    except Exception:
+        print(f"mkdir {orfs_filt_db_dir} failed", file=sys.stderr)
+        sys.exit(1)
 
-    # If filtering was rerun, the DB must be rebuilt to match the new filtered FASTA.
-    if run_filter:
-        create_db = True
-        if os.path.isdir(orfs_filt_db_dir):
-            try:
-                shutil.rmtree(orfs_filt_db_dir)
-            except Exception:
-                print(f"rm -r {orfs_filt_db_dir} failed", file=sys.stderr)
-                sys.exit(1)
-
-    if create_db:
-        try:
-            os.makedirs(orfs_filt_db_dir, exist_ok=True)
-        except Exception:
-            print(f"mkdir {orfs_filt_db_dir} failed", file=sys.stderr)
-            sys.exit(1)
-
-        try:
-            run(
-                [
-                    mmseqs,
-                    "createdb",
-                    concat_orfs_filt,
-                    orfs_filt_db,
-                    "--dbtype", "1"
-                ]
-            )
-        except subprocess.CalledProcessError:
-            print("mmseqs createdb failed", file=sys.stderr)
-            sys.exit(1)
+    try:
+        run(
+            [
+                mmseqs,
+                "createdb",
+                concat_orfs_filt,
+                orfs_filt_db,
+                "--dbtype", "1"
+            ]
+        )
+    except subprocess.CalledProcessError:
+        print("mmseqs createdb failed", file=sys.stderr)
+        sys.exit(1)
 
     ###########################################################################
     # 3.6. Run ORF clustering
@@ -252,8 +229,16 @@ def main() -> None:
         print("mmseqs createtsv failed", file=sys.stderr)
         sys.exit(1)
 
+    ###########################################################################
+    # 3.8. Compress the clustering table
+    ###########################################################################
+
+    # mmseqs createtsv only writes plain text, so compress after the fact. Module 6
+    # reads this through DuckDB read_csv, which handles .gz transparently.
+    gzip_file(mmseqs_clust_table)
+
     ########################################################################### 
-    # 3.8. Write output log and exit
+    # 3.9. Write output log and exit
     ###########################################################################
     
     print(f"{os.path.basename(__file__)} exited successfully")

@@ -236,9 +236,23 @@ def main() -> None:
 
     # check if assembly_file exists
     check_file(assembly_file, "assembly_file")
+
+    ###########################################################################
+    # 3.5. Drop MEGAHIT's per-kmer scratch
+    ###########################################################################
+
+    # intermediate_contigs/ holds one assembly per k-mer size (~250 MB per sample on
+    # the test set) and is never read downstream. Delete it as soon as the final
+    # contigs are confirmed rather than at the end of the script: every stage below
+    # (mapping, markdup) can fail or be interrupted, and freeing the space here means
+    # it is reclaimed before the disk-heavy mapping stage instead of after it.
+    # Absent for a precomputed assembly, where MEGAHIT never ran.
+    interm_contigs = os.path.join(assembly_output_dir, "intermediate_contigs")
+    if os.path.isdir(interm_contigs):
+        shutil.rmtree(interm_contigs, ignore_errors=True)
     
     ###########################################################################
-    # 3.5. Count number of sequences by counting lines starting with '>'
+    # 3.6. Count number of sequences by counting lines starting with '>'
     ###########################################################################
     
     try:
@@ -256,7 +270,7 @@ def main() -> None:
         sys.exit(0)
 
     ###########################################################################
-    # 3.6. Add the sample name to the contig headers to ensure uniqueness across samples (e.g. for downstream clustering)
+    # 3.7. Add the sample name to the contig headers to ensure uniqueness across samples (e.g. for downstream clustering)
     ###########################################################################
 
     tmp_assembly_file = assembly_file + ".tmp"
@@ -278,7 +292,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.7. Map short reads, or reheader a precomputed BAM to match the
+    # 3.8. Map short reads, or reheader a precomputed BAM to match the
     #      (now sample-name-prefixed) assembly
     ###########################################################################
 
@@ -363,6 +377,13 @@ def main() -> None:
             print("samtools convert to bam failed", file=sys.stderr)
             sys.exit(1)
 
+        # The SAM is the largest scratch file this module produces (uncompressed
+        # alignments) and is dead the moment the BAM exists. Drop it now so it does
+        # not sit alongside the BAM through sorting and markdup, and so a failure
+        # below cannot strand it.
+        if os.path.isfile(sam_path):
+            os.remove(sam_path)
+
         # samtools sort -> sorted BAM
         sorted_bam_path = os.path.join(output_dir, f"{sample_name}_sorted.bam")
         try:
@@ -370,6 +391,10 @@ def main() -> None:
         except subprocess.CalledProcessError:
             print("samtools sort failed", file=sys.stderr)
             sys.exit(1)
+
+        # Same reasoning: the unsorted BAM is superseded by the sorted one.
+        if os.path.isfile(bam_path):
+            os.remove(bam_path)
 
     # samtools index -- both modes converge here on sorted_bam_path
     try:
@@ -379,7 +404,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.8. Optionally mark and remove duplicates with Picard
+    # 3.9. Optionally mark and remove duplicates with Picard
     ###########################################################################
 
     if markdup:
@@ -412,17 +437,18 @@ def main() -> None:
             sys.exit(1)
 
     ###########################################################################
-    # 3.9. Define cleanup paths (mode-aware: a run using --precomputed_bam never
-    #      created sam_path/bam_path, and never runs markdup -- see validation
-    #      above) and clean
+    # 3.10. Clean whatever scratch is left. The SAM and unsorted BAM are already
+    #      gone -- each is removed as soon as the step consuming it succeeds (3.8),
+    #      so only mode-specific leftovers remain: the reheader map for a
+    #      --precomputed_bam run, and Picard's temp dir when markdup ran.
     ###########################################################################
 
     if precomputed_bam:
         cleanup_paths = [reheader_txt]
     elif markdup:
-        cleanup_paths = [sam_path, bam_path, tmp_dir]
+        cleanup_paths = [tmp_dir]
     else:
-        cleanup_paths = [sam_path, bam_path]
+        cleanup_paths = []
 
     try:
         for p in cleanup_paths:
@@ -434,16 +460,8 @@ def main() -> None:
         print("removing intermediate mapping files failed", file=sys.stderr)
         sys.exit(1)
 
-    interm_contigs = os.path.join(output_dir, "assembly", "intermediate_contigs")
-    if os.path.isdir(interm_contigs):
-        try:
-            shutil.rmtree(interm_contigs)
-        except Exception:
-            print("removing assembly intermediate files failed", file=sys.stderr)
-            sys.exit(1)
-
     ########################################################################### 
-    # 3.10. Write output log and exit
+    # 3.11. Write output log and exit
     ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")

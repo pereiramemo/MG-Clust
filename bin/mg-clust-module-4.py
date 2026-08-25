@@ -23,7 +23,7 @@ import shutil
 import sys, os
 import subprocess
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import run, check_tools, check_file
+from utils import run, check_tools, check_file, gzip_file
 
 mmseqs = "mmseqs"
 
@@ -86,14 +86,24 @@ def main() -> None:
 
     check_tools([mmseqs])
     args = parse_args()
+    contigs = args.contigs
+    bed_file = args.bed_file
+    output_dir = args.output_dir
+    overwrite = args.overwrite
+    gtdb = args.gtdb
+    sample_name = args.sample_name
+    nslots = args.nslots
+    sensitivity = args.sensitivity
+    lca_mode = args.lca_mode
+    tax_lineage = args.tax_lineage
 
     ###########################################################################
     # 3.1. Check mandatory files
     ###########################################################################
 
-    check_file(args.contigs, "contigs fasta file")
-    if args.bed_file:
-        check_file(args.bed_file, "ORF BED file")
+    check_file(contigs, "contigs fasta file")
+    if bed_file:
+        check_file(bed_file, "ORF BED file")
 
     ###########################################################################
     # 3.2. Check GTDB database; download if absent
@@ -101,10 +111,10 @@ def main() -> None:
 
     # A valid mmseqs2 database always has a companion .dbtype file.
     # If it is missing, download the GTDB database via mmseqs databases.
-    if not os.path.isfile(args.gtdb + ".dbtype"):
-        print(f"GTDB database not found at {args.gtdb}; downloading now ...")
+    if not os.path.isfile(gtdb + ".dbtype"):
+        print(f"GTDB database not found at {gtdb}; downloading now ...")
 
-        gtdb_dir = os.path.dirname(args.gtdb)
+        gtdb_dir = os.path.dirname(gtdb)
         try:
             os.makedirs(gtdb_dir, exist_ok=True)
         except Exception:
@@ -118,9 +128,9 @@ def main() -> None:
                     mmseqs,
                     "databases",
                     "GTDB",
-                    args.gtdb,
+                    gtdb,
                     download_tmp,
-                    "--threads", str(args.nslots)
+                    "--threads", str(nslots)
                 ]
             )
         except subprocess.CalledProcessError:
@@ -140,14 +150,14 @@ def main() -> None:
     # 3.3. Check output directory
     ###########################################################################
 
-    if os.path.isdir(args.output_dir):
-        if not args.overwrite:
-            print(f"{args.output_dir} already exists; use --overwrite to overwrite")
+    if os.path.isdir(output_dir):
+        if not overwrite:
+            print(f"{output_dir} already exists; use --overwrite to overwrite")
             sys.exit(0)
         try:
-            shutil.rmtree(args.output_dir)
+            shutil.rmtree(output_dir)
         except Exception:
-            print(f"rm -r output directory {args.output_dir} failed", file=sys.stderr)
+            print(f"rm -r output directory {output_dir} failed", file=sys.stderr)
             sys.exit(1)
 
     ###########################################################################
@@ -155,23 +165,23 @@ def main() -> None:
     ###########################################################################
 
     try:
-        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
     except Exception:
-        print(f"mkdir {args.output_dir} failed", file=sys.stderr)
+        print(f"mkdir {output_dir} failed", file=sys.stderr)
         sys.exit(1)
 
     ###########################################################################
     # 3.5. Create MMseqs2 nucleotide database from contigs
     ###########################################################################
 
-    contigs_db = os.path.join(args.output_dir, "contigs_db")
+    contigs_db = os.path.join(output_dir, "contigs_db")
 
     try:
         run(
             [
                 mmseqs,
                 "createdb",
-                args.contigs,
+                contigs,
                 contigs_db,
                 "--dbtype", "2"  # 2 = nucleotide
             ]
@@ -184,8 +194,8 @@ def main() -> None:
     # 3.6. Run mmseqs taxonomy against GTDB
     ###########################################################################
 
-    tax_db = os.path.join(args.output_dir, "contigs_tax_db")
-    tmp_dir = os.path.join(args.output_dir, "tmp")
+    tax_db = os.path.join(output_dir, "contigs_tax_db")
+    tmp_dir = os.path.join(output_dir, "tmp")
 
     try:
         run(
@@ -193,13 +203,13 @@ def main() -> None:
                 mmseqs,
                 "taxonomy",
                 contigs_db,
-                args.gtdb,
+                gtdb,
                 tax_db,
                 tmp_dir,
-                "--threads", str(args.nslots),
-                "-s", str(args.sensitivity),
-                "--lca-mode", str(args.lca_mode),
-                "--tax-lineage", str(args.tax_lineage)
+                "--threads", str(nslots),
+                "-s", str(sensitivity),
+                "--lca-mode", str(lca_mode),
+                "--tax-lineage", str(tax_lineage)
             ]
         )
     except subprocess.CalledProcessError:
@@ -218,7 +228,7 @@ def main() -> None:
     # 3.7. Export taxonomy assignments to TSV
     ###########################################################################
 
-    tax_tsv = os.path.join(args.output_dir, f"{args.sample_name}_contig_tax_annot.tsv")
+    tax_tsv = os.path.join(output_dir, f"{sample_name}_contig_tax_annot.tsv")
 
     try:
         run(
@@ -238,14 +248,14 @@ def main() -> None:
     # 3.8. Generate Kraken-style taxonomy report
     ###########################################################################
 
-    tax_report = os.path.join(args.output_dir, f"{args.sample_name}_contig_tax_report.txt")
+    tax_report = os.path.join(output_dir, f"{sample_name}_contig_tax_report.txt")
 
     try:
         run(
             [
                 mmseqs,
                 "taxonomyreport",
-                args.gtdb,
+                gtdb,
                 tax_db,
                 tax_report
             ]
@@ -254,8 +264,17 @@ def main() -> None:
         print("mmseqs taxonomyreport failed", file=sys.stderr)
         sys.exit(1)
 
+    ###########################################################################
+    # 3.9. Compress the taxonomy table
+    ###########################################################################
+
+    # Module 6 concatenates this with a raw byte copy and reads it via DuckDB; both
+    # handle gzip. The Kraken-style report is left plain -- it is a small human-facing
+    # summary, not a pipeline input.
+    gzip_file(tax_tsv)
+
     ########################################################################### 
-    # 3.9. Write output log and exit
+    # 3.10. Write output log and exit
     ###########################################################################
     
     print(f"{os.path.basename(__file__)} exited successfully")

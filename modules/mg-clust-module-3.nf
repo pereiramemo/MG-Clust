@@ -17,9 +17,9 @@ process MODULE3 {
     path(orf_files)
 
     output:
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_clust-minlen${params.min_orf_len}aa-id*perc/orfs_clust-minlen${params.min_orf_len}aa-id*perc.tsv"),                      emit: clust_tsv
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs.faa"),                                               emit: orfs_faa
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_filt-minlen${params.min_orf_len}aa.faa"),         emit: orfs_filt_faa
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_clust-minlen${params.min_orf_len}aa-id*perc/orfs_clust-minlen${params.min_orf_len}aa-id*perc.tsv.gz"),                      emit: clust_tsv
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs.faa.gz"),                                               emit: orfs_faa
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/orfs_filt-minlen${params.min_orf_len}aa.faa.gz"),         emit: orfs_filt_faa
     script:
     """
     mg-clust-module-3.py \

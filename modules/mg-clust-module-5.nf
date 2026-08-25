@@ -17,7 +17,7 @@ process MODULE5 {
     tuple val(sample_name), path(orfs_faa)
 
     output:
-    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot.tsv"),       emit: fun_annot
+    path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot.tsv.gz"),       emit: fun_annot
    //  path("${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name}/${sample_name}_orfs-minlen${params.min_orf_len}aa-fun_annot_all.tsv"), emit: fun_annot_all
 
     script:
