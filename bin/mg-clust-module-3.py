@@ -18,6 +18,7 @@ where dependencies are available on PATH.
 ###############################################################################
 
 import argparse
+import glob
 import sys, os
 import subprocess
 import shutil
@@ -230,12 +231,37 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.8. Compress the clustering table
+    # 3.8. Compress the clustering table and drop the mmseqs databases
     ###########################################################################
 
     # mmseqs createtsv only writes plain text, so compress after the fact. Module 6
     # reads this through DuckDB read_csv, which handles .gz transparently.
     gzip_file(mmseqs_clust_table)
+
+    # createtsv in 3.7 was the last consumer of both mmseqs databases, so they 
+    # are deleted here.
+
+    # The cluster DB shares clust_dir with the published table and differs from it
+    # only by suffix (<clust_db> vs <clust_db>.tsv.gz), so the table is excluded by
+    # name rather than trusted to fall outside the glob. glob.escape guards against
+    # metacharacters in --output_dir.
+    keep = {mmseqs_clust_table, mmseqs_clust_table + ".gz"}
+    for db_path in glob.glob(glob.escape(clust_db) + "*"):
+        if db_path in keep or not os.path.isfile(db_path):
+            continue
+        try:
+            os.remove(db_path)
+        except OSError as exc:
+            print(f"rm {db_path} failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    # The sequence DB has a directory to itself, so it goes wholesale.
+    if os.path.isdir(orfs_filt_db_dir):
+        try:
+            shutil.rmtree(orfs_filt_db_dir)
+        except Exception:
+            print(f"rm {orfs_filt_db_dir} failed", file=sys.stderr)
+            sys.exit(1)
 
     ########################################################################### 
     # 3.9. Write output log and exit
