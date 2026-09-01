@@ -269,8 +269,7 @@ def main() -> None:
     ###########################################################################
 
     # Module 6 concatenates this with a raw byte copy and reads it via DuckDB; both
-    # handle gzip. The Kraken-style report is left plain -- it is a small human-facing
-    # summary, not a pipeline input.
+    # handle gzip.
     gzip_file(tax_tsv)
 
     ########################################################################### 
