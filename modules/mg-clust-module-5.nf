@@ -29,9 +29,9 @@ process MODULE5 {
         --ko_list       ${params.ko_list} \
         --sample_name   ${sample_name} \
         --evalue_thres  ${params.evalue_thres} \
+        --tighten_evalue_factor ${params.tighten_evalue_factor} \
         --min_orf_len   ${params.min_orf_len} \
         --edge_tol      ${params.edge_tol} \
-        --relax_evalue_factor ${params.relax_evalue_factor} \
         --nslots        ${task.cpus} \
         --output_dir    ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --overwrite

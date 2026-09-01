@@ -69,7 +69,7 @@ workflow {
           --ko_list         PATH  KOfam adaptive threshold file, --db_mode ko only (default: ${params.ko_list})
           --evalue_thres    NUM   E-value threshold (default: ${params.evalue_thres})
           --edge_tol        INT   aa tolerance for truncated-ORF rescue, --db_mode ko only (default: ${params.edge_tol})
-          --relax_evalue_factor NUM  E-value tightening factor for rescued hits, --db_mode ko only (default: ${params.relax_evalue_factor})
+          --tighten_evalue_factor NUM  E-value tightening factor for rescued hits, --db_mode ko only (default: ${params.tighten_evalue_factor})
         """.stripIndent()
         exit 0
     }

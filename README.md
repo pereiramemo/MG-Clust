@@ -210,7 +210,7 @@ MODULE5 — Functional annotation (KO HMMs):
   --ko_list         PATH  KOfam adaptive threshold file, --db_mode ko only (default: ~/.mg-clust/db/ko/ko_list.tsv)
   --evalue_thres    NUM   E-value threshold (default: 1e-3)
   --edge_tol        INT   aa tolerance for truncated-ORF rescue, --db_mode ko only (default: 3)
-  --relax_evalue_factor NUM  E-value tightening factor for rescued hits, --db_mode ko only (default: 100)
+  --tighten_evalue_factor NUM  E-value tightening factor for rescued hits, --db_mode ko only (default: 100)
 ```
 
 ## Partial execution
@@ -456,7 +456,7 @@ mg-clust-module-4.py \
 > Stop after this module with `--stop_at_module 5`. Runs in parallel per sample.
 
 Functional annotation of predicted ORF protein sequences against a HMM database using pyHMMER. `--db_mode` selects the scoring strategy — required, with no default:
-- `ko` — KOfam adaptive per-KO thresholds (`ko_list`), with coverage-aware rescue of truncated ORFs and an e-value-only fallback for KOs with no cross-validated threshold (nt-KOs). The only mode that consumes `--ko_list`, and the only one where `--edge_tol`/`--relax_evalue_factor` matter.
+- `ko` — KOfam adaptive per-KO thresholds (`ko_list`), with coverage-aware rescue of truncated ORFs and an e-value-only fallback for KOs with no cross-validated threshold (nt-KOs). The only mode that consumes `--ko_list`, and the only one where `--edge_tol`/`--tighten_evalue_factor` matter.
 - `ga` — per-model GA/TC/NC cutoffs embedded in the HMM file itself (e.g. Pfam-A). Not valid against KOfam, which embeds no cutoffs at all.
 - `evalue` — a single global `--evalue_thres` applied uniformly to all models.
 
@@ -472,7 +472,7 @@ mg-clust-module-5.py \
     --ko_list       ~/.mg-clust/db/ko/ko_list.tsv \
     --evalue_thres  1e-3 \
     --edge_tol      3 \
-    --relax_evalue_factor 100 \
+    --tighten_evalue_factor 100 \
     --nslots        4 \
     [--overwrite]
 ```
@@ -485,14 +485,14 @@ mg-clust-module-5.py \
 | `--db_mode` | — | `ko` \| `ga` \| `evalue` scoring strategy (required, no default) |
 | `--hmm_db` | `~/.mg-clust/db/ko/ko_profiles.hmm` | Path to the HMM profile database |
 | `--ko_list` | `~/.mg-clust/db/ko/ko_list.tsv` | KOfam adaptive threshold file; `--db_mode ko` only |
-| `--evalue_thres` | `1e-3` | Sole criterion in `--db_mode evalue`; fallback bar for nt-KOs and base guard for `--relax_evalue_factor` in `--db_mode ko`; unused in `--db_mode ga` |
+| `--evalue_thres` | `1e-3` | Sole criterion in `--db_mode evalue`; fallback bar for nt-KOs and base guard for `--tighten_evalue_factor` in `--db_mode ko`; unused in `--db_mode ga` |
 | `--edge_tol` | `3` | aa tolerance for the alignment-flush check used to detect truncated ORFs; `--db_mode ko` only |
-| `--relax_evalue_factor` | `100` | Factor by which the e-value bar is tightened for rescued truncated-ORF hits; `--db_mode ko` only |
+| `--tighten_evalue_factor` | `100` | Factor by which the e-value bar is tightened for rescued truncated-ORF hits; `--db_mode ko` only |
 | `--nslots` | `4` | Threads |
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
 **Outputs (inside `<sample_name>/`):**
-- `<sample_name>_orfs-minlen<N>aa-fun_annot.tsv` — collapsed, one best KO per ORF (columns: `orf_id`, `ko_id`, `score`, `evalue`, `coverage`, `tier`; `tier` is `confident`/`rescued_partial`/`nt_ko_evalue_only` in `--db_mode ko`, or `ga_pass`/`evalue_pass` otherwise, with `coverage` left `NA` where not applicable). This is the file wired into module 6's `--fun_annot_files`.
+- `<sample_name>_orfs-minlen<N>aa-fun_annot.tsv` — collapsed, one best KO per ORF (columns: `orf_id`, `ko_id`, `score`, `evalue`, `coverage`, `tier`; `tier` is one of `score_confident`, `evalue_confident`, `score_putative`, `evalue_putative` or `evalue_pass` in `--db_mode ko`, `ga_pass` in `--db_mode ga`, and `evalue_pass` in `--db_mode evalue`; the table is written headerless so module 6 can concatenate it raw). This is the file wired into module 6's `--fun_annot_files`.
 - `<sample_name>_orfs-minlen<N>aa-fun_annot_multi.tsv` — rich, multi-row-per-ORF sibling with every accepted (ORF, KO) pair, same columns. Published as a secondary artifact; not consumed by module 6.
 
 ---
