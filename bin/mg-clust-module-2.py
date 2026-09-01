@@ -190,12 +190,15 @@ def main() -> None:
         # 3.4. Predict ORFs
         ###########################################################################
 
+        out_file = os.path.join(output_dir, f"{sample_name}_orfs.out")
+
         try:
             run(
                 [
                     fraggenescan,
                     "-s", assembly_file,
-                    "-o", os.path.join(output_dir, f"{sample_name}_orfs"),
+                    "-a", faa_file,
+                    "-m", out_file,
                     "-w", "0",
                     "--unordered",
                     "-p", str(nslots),
@@ -209,8 +212,6 @@ def main() -> None:
         ###########################################################################
         # 3.5. Create BED file
         ###########################################################################
-
-        out_file = os.path.join(output_dir, f"{sample_name}_orfs.out")
 
         # check that .out file was created
         check_file(out_file, "FragGeneScan output .out file")
@@ -244,6 +245,10 @@ def main() -> None:
         except Exception as exc:
             print(f"Creating bed file failed: {exc}", file=sys.stderr)
             sys.exit(1)
+
+        # The .out has now been fully parsed into the BED and has no other consumer,
+        # so it gets deleted here instead of at the end of main() 
+        os.remove(out_file)
 
     ###########################################################################
     # 3.6. Build bedtools genome file from BAM header
@@ -320,6 +325,12 @@ def main() -> None:
     except subprocess.CalledProcessError:
         print("bedtools to compute mean coverage failed", file=sys.stderr)
         sys.exit(1)
+
+    # Both bedtools coverage stages are done, so the sorted BED and the genome file
+    # have no further use. They are removed here.
+    for dead_path in (sorted_bed_file, genome_file):
+        if os.path.isfile(dead_path):
+            os.remove(dead_path)
 
     ###########################################################################
     # 3.10. Add sample names to mean coverage and read counts tables

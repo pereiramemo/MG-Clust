@@ -29,7 +29,6 @@ import glob
 import gzip
 import os
 import shutil
-import subprocess
 import sys
 import tarfile
 import urllib.request
@@ -161,7 +160,7 @@ def _fetch_ko_profiles(hmm_db: str) -> None:
         """"""
         print("Extracting profiles ...")
         with tarfile.open(archive, "r:gz") as tar:
-            tar.extract("profiles", path=ko_dir)
+            tar.extractall(ko_dir)    
         """"""
         hmm_files = sorted(glob.glob(os.path.join(profiles_dir, "*.hmm")))
         if not hmm_files:
@@ -501,8 +500,9 @@ def write_table(rows: list, path: str) -> None:
     with open(path, "w") as out:
         for row in sorted(rows, key=lambda r: (r["orf_id"], r["ko_id"])):
             out.write(
-                f"{row['orf_id']}\t{row['ko_id']}\t{row['score']:.2f}\t"
-                f"{row['evalue']:.2e}\t{row['coverage']:.4f}\t{row['tier']}\n"
+                f"{row['orf_id']}\t{row['ko_id']}\t{row['evalue']:.2e}\t"
+                f"{row['score']:.2f}\t{row['calibration']}\t"
+                f"{row['coverage']:.4f}\t{row['tier']}\n"
             )
 
 ###############################################################################
