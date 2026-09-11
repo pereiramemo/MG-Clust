@@ -26,7 +26,8 @@ process MODULE3 {
         --orf_files      ${orf_files} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')} \
         --nslots         ${task.cpus} \
-        --min_orf_len ${params.min_orf_len} \
+        --max_mem        ${task.memory.toGiga()} \
+        --min_orf_len    ${params.min_orf_len} \
         --clust_thres    ${params.clust_thres} \
         --clust_cov_len  ${params.clust_cov_len} \
         --overwrite

@@ -104,50 +104,10 @@ def main() -> None:
     check_file(contigs, "contigs fasta file")
     if bed_file:
         check_file(bed_file, "ORF BED file")
+    check_file(gtdb + ".dbtype", "GTDB database")
 
     ###########################################################################
-    # 3.2. Check GTDB database; download if absent
-    ###########################################################################
-
-    # A valid mmseqs2 database always has a companion .dbtype file.
-    # If it is missing, download the GTDB database via mmseqs databases.
-    if not os.path.isfile(gtdb + ".dbtype"):
-        print(f"GTDB database not found at {gtdb}; downloading now ...")
-
-        gtdb_dir = os.path.dirname(gtdb)
-        try:
-            os.makedirs(gtdb_dir, exist_ok=True)
-        except Exception:
-            print(f"mkdir {gtdb_dir} failed", file=sys.stderr)
-            sys.exit(1)
-
-        download_tmp = os.path.join(gtdb_dir, "gtdb_download_tmp")
-        try:
-            run(
-                [
-                    mmseqs,
-                    "databases",
-                    "GTDB",
-                    gtdb,
-                    download_tmp,
-                    "--threads", str(nslots)
-                ]
-            )
-        except subprocess.CalledProcessError:
-            print("mmseqs databases GTDB download failed", file=sys.stderr)
-            sys.exit(1)
-
-        if os.path.isdir(download_tmp):
-            try:
-                shutil.rmtree(download_tmp)
-            except Exception:
-                print(f"rm -r {download_tmp} failed", file=sys.stderr)
-                sys.exit(1)
-
-        print("GTDB database download complete.")
-
-    ###########################################################################
-    # 3.3. Check output directory
+    # 3.2. Check output directory
     ###########################################################################
 
     if os.path.isdir(output_dir):
@@ -161,7 +121,7 @@ def main() -> None:
             sys.exit(1)
 
     ###########################################################################
-    # 3.4. Create output directory
+    # 3.3. Create output directory
     ###########################################################################
 
     try:
@@ -171,7 +131,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.5. Create MMseqs2 nucleotide database from contigs
+    # 3.4. Create MMseqs2 nucleotide database from contigs
     ###########################################################################
 
     contigs_db = os.path.join(output_dir, "contigs_db")
@@ -191,7 +151,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.6. Run mmseqs taxonomy against GTDB
+    # 3.5. Run mmseqs taxonomy against GTDB
     ###########################################################################
 
     tax_db = os.path.join(output_dir, "contigs_tax_db")
@@ -225,7 +185,7 @@ def main() -> None:
             sys.exit(1)
 
     ###########################################################################
-    # 3.7. Export taxonomy assignments to TSV
+    # 3.6. Export taxonomy assignments to TSV
     ###########################################################################
 
     tax_tsv = os.path.join(output_dir, f"{sample_name}_contig_tax_annot.tsv")
@@ -245,7 +205,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.8. Generate Kraken-style taxonomy report
+    # 3.7. Generate Kraken-style taxonomy report
     ###########################################################################
 
     tax_report = os.path.join(output_dir, f"{sample_name}_contig_tax_report.txt")
@@ -265,7 +225,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.9. Compress the taxonomy table
+    # 3.8. Compress the taxonomy table
     ###########################################################################
 
     # Module 6 concatenates this with a raw byte copy and reads it via DuckDB; both
@@ -273,7 +233,7 @@ def main() -> None:
     gzip_file(tax_tsv)
 
     ########################################################################### 
-    # 3.10. Write output log and exit
+    # 3.9. Write output log and exit
     ###########################################################################
     
     print(f"{os.path.basename(__file__)} exited successfully")

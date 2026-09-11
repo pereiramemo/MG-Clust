@@ -30,7 +30,7 @@ workflow {
         Threading: modules 1, 2, 4 and 5 run one task per sample, each using
         --nslots threads; --maxForks caps each module separately, not the
         pipeline as a whole. Modules 3 and 6 run a single task over all samples,
-        taking --maxForks x --nslots threads (${params.maxForks} x ${params.nslots} = ${(params.maxForks as int) * (params.nslots as int)}).
+        taking --nslots_collected threads (${params.nslots_collected}).
         Modules 3, 4 and 5 are independent branches of the DAG and can run at the
         same time, so requested threads may exceed --maxForks x --nslots several
         times over; only module 6 waits on everything and runs alone. The local

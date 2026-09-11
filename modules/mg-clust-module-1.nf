@@ -29,6 +29,7 @@ process MODULE1 {
         --sample_name        ${sample_name} \
         --output_dir         ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --nslots             ${task.cpus} \
+        --max_mem            ${task.memory.toGiga()} \
         --assem_preset       ${params.assem_preset} \
         --min_contig_length  ${params.min_contig_len} \
         --min_seq            ${params.min_seq} \
@@ -71,6 +72,7 @@ process MODULE1_PRECOMPUTED {
         --sample_name           ${sample_name} \
         --output_dir            module-1/${sample_name} \
         --nslots                ${task.cpus} \
+        --max_mem               ${task.memory.toGiga()} \
         --min_seq               ${params.min_seq} \
         --overwrite
     """
@@ -112,6 +114,7 @@ process MODULE1_ASSEMBLY_ONLY {
         --sample_name           ${sample_name} \
         --output_dir            module-1/${sample_name} \
         --nslots                ${task.cpus} \
+        --max_mem               ${task.memory.toGiga()} \
         --min_seq               ${params.min_seq} \
         --overwrite
     """

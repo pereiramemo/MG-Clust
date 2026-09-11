@@ -32,6 +32,7 @@ process MODULE6 {
         --clust_thres    ${params.clust_thres} \
         --min_orf_len    ${params.min_orf_len} \
         --nslots         ${task.cpus} \
+        --max_mem        ${task.memory.toGiga()} \
         --output_dir     ${task.process.toLowerCase().replaceFirst('module', 'module-')} \
         --overwrite
     """

@@ -51,6 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads used (default: 4)")
 
+    parser.add_argument("--max_mem", dest="max_mem", type=int, default=0,
+        help="memory budget for this task in GiB, passed on to bbduk as -Xmx")
+
     parser.add_argument("--min_orf_len", dest="min_orf_len", type=int, default=60,
         help="minimum length of ORFs (amino acids); ORFs shorter than this will be discarded (default: 60)")
 
@@ -68,6 +71,22 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
+
+# Dev only section
+"""
+orf_files = [
+    "/home/epereira/workspace/repos/tools/MG-Clust/test/mg-clust-output/intermediate/module-2/P01-A01-1/P01-A01-1_orfs.faa.gz",
+    "/home/epereira/workspace/repos/tools/MG-Clust/test/mg-clust-output/intermediate/module-2/P01-A02-9/P01-A02-9_orfs.faa.gz",
+    "/home/epereira/workspace/repos/tools/MG-Clust/test/mg-clust-output/intermediate/module-2/P01-A03-17/P01-A03-17_orfs.faa.gz"]
+nslots = 4
+max_mem = 16
+min_orf_len = 60
+clust_thres = 0.7
+clust_cov_len = 0.85
+output_dir = "/home/epereira/workspace/repos/tools/MG-Clust/test/mg-clust-output/intermediate/module-3"
+overwrite = False
+"""
+
 ###############################################################################
 # 3. Define the main function
 ###############################################################################
@@ -76,19 +95,27 @@ def main() -> None:
 
     check_tools([bbduk, mmseqs])
     args = parse_args()
+    orf_files = args.orf_files
+    nslots = args.nslots
+    max_mem = args.max_mem
+    min_orf_len = args.min_orf_len
+    clust_thres = args.clust_thres
+    clust_cov_len = args.clust_cov_len
+    output_dir = args.output_dir
+    overwrite = args.overwrite
 
     ###########################################################################
     # 3.1. Check output directory
     ###########################################################################
 
-    if os.path.isdir(args.output_dir):
-        if not args.overwrite:
-            print(f"{args.output_dir} already exists; use --overwrite to overwrite")
+    if os.path.isdir(output_dir):
+        if not overwrite:
+            print(f"{output_dir} already exists; use --overwrite to overwrite")
             sys.exit(0)
         try:
-            shutil.rmtree(args.output_dir)
+            shutil.rmtree(output_dir)
         except Exception:
-            print(f"rm -r output directory {args.output_dir} failed", file=sys.stderr)
+            print(f"rm -r output directory {output_dir} failed", file=sys.stderr)
             sys.exit(1)
 
     ###########################################################################
@@ -96,9 +123,9 @@ def main() -> None:
     ###########################################################################
 
     try:
-        os.makedirs(args.output_dir, exist_ok=False)
+        os.makedirs(output_dir, exist_ok=False)
     except Exception:
-        print(f"mkdir {args.output_dir} failed", file=sys.stderr)
+        print(f"mkdir {output_dir} failed", file=sys.stderr)
         sys.exit(1)
 
     ###########################################################################
@@ -108,10 +135,10 @@ def main() -> None:
     # Inputs arrive gzipped from module 2. The raw byte-copy concatenation below
     # needs no change: concatenated gzip members are themselves a valid gzip stream,
     # and bbduk/mmseqs both read .gz directly.
-    concat_orfs = os.path.join(args.output_dir, "orfs.faa.gz")
+    concat_orfs = os.path.join(output_dir, "orfs.faa.gz")
 
     with open(concat_orfs, "wb") as out_fh:
-        for orf_file in args.orf_files:
+        for orf_file in orf_files:
             try:
                 with open(orf_file, "rb") as in_fh:
                     shutil.copyfileobj(in_fh, out_fh)
@@ -123,17 +150,22 @@ def main() -> None:
     # 3.4. Filter ORFs by length
     ###########################################################################
 
-    concat_orfs_filt = os.path.join(args.output_dir, f"orfs_filt-minlen{args.min_orf_len}aa.faa.gz")
+    concat_orfs_filt = os.path.join(output_dir, f"orfs_filt-minlen{min_orf_len}aa.faa.gz")
 
     try:
         run(
             [
                 bbduk,
+                # Must precede the bbduk arguments: the wrapper forwards a leading
+                # -Xmx straight to the JVM instead of computing one from the node's
+                # RAM. 0.75 leaves headroom for the JVM's own non-heap memory, which
+                # is outside -Xmx but inside the cgroup.
+                *([f"-Xmx{max(1, int(max_mem * 0.75))}g"] if max_mem else []),
                 f"in={concat_orfs}",
                 f"out={concat_orfs_filt}",
                 "overwrite=t",
-                f"threads={args.nslots}",
-                f"minlength={args.min_orf_len}",
+                f"threads={nslots}",
+                f"minlength={min_orf_len}",
                 "amino=t"
             ]
         )
@@ -145,7 +177,7 @@ def main() -> None:
     # 3.5. Create mmseqs database
     ###########################################################################
 
-    orfs_filt_db_dir = os.path.join(args.output_dir, f"orfs_filt_db-minlen{args.min_orf_len}aa")
+    orfs_filt_db_dir = os.path.join(output_dir, f"orfs_filt_db-minlen{min_orf_len}aa")
     orfs_filt_db = os.path.join(orfs_filt_db_dir, "orfs_filt_db")
 
     try:
@@ -172,8 +204,8 @@ def main() -> None:
     # 3.6. Run ORF clustering
     ###########################################################################
 
-    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
-    clust_dir = os.path.join(args.output_dir, f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc")
+    clust_thres_str = str(clust_thres * 100).rstrip("0").rstrip(".")
+    clust_dir = os.path.join(output_dir, f"orfs_clust-minlen{min_orf_len}aa-id{clust_thres_str}perc")
 
     try:
         os.makedirs(clust_dir, exist_ok=False)
@@ -182,7 +214,7 @@ def main() -> None:
         sys.exit(1)
 
     tmp_dir = os.path.join(clust_dir, "tmp")
-    clust_db = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc")
+    clust_db = os.path.join(clust_dir, f"orfs_clust-minlen{min_orf_len}aa-id{clust_thres_str}perc")
 
     try:
         run(
@@ -192,10 +224,10 @@ def main() -> None:
                 orfs_filt_db,
                 clust_db,
                 tmp_dir,
-                "--min-seq-id", str(args.clust_thres),
-                "--threads", str(args.nslots),
+                "--min-seq-id", str(clust_thres),
+                "--threads", str(nslots),
                 "--cov-mode", "0",
-                "-c", str(args.clust_cov_len)
+                "-c", str(clust_cov_len)
             ]
         )
     except subprocess.CalledProcessError:
@@ -213,7 +245,7 @@ def main() -> None:
     # 3.7. Convert clustering results to TSV
     ###########################################################################
 
-    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc.tsv")
+    mmseqs_clust_table = os.path.join(clust_dir, f"orfs_clust-minlen{min_orf_len}aa-id{clust_thres_str}perc.tsv")
 
     try:
         run(

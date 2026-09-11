@@ -82,6 +82,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads (default: 4)")
 
+    parser.add_argument("--max_mem", dest="max_mem", type=int, default=0,
+        help="memory budget for this task in GiB, applied as DuckDB's memory_limit")
+
     parser.add_argument("--output_dir", dest="output_dir", required=True,
         help="directory to output generated data",
     )
@@ -182,21 +185,37 @@ def build_collapsed_table(
 
 
 ###############################################################################
-# 2.5 Configure DuckDB thread usage
+# 2.5 Configure DuckDB thread and memory usage
 ###############################################################################
 
-def configure_duckdb(nslots: int) -> None:
-    """Cap DuckDB's thread pool at nslots.
+def configure_duckdb(nslots: int, max_mem: int = 0) -> None:
+    """Cap DuckDB's thread pool at nslots and its memory at max_mem GiB.
 
-    Left alone, DuckDB sizes its thread pool from the host's core count, which
-    ignores how many cores this task was actually allocated -- on a cluster node
-    that means oversubscribing the node.
+    Left alone, DuckDB sizes both its thread pool and its memory limit from the
+    host -- core count and total RAM -- which ignores what this task was actually
+    allocated. On a cluster node that means oversubscribing the node's CPUs and
+    blowing straight past the cgroup's memory limit.
+
+    Setting temp_directory alongside memory_limit is what converts an over-budget
+    join from an OOM kill into a (slower) spill to disk. The relative path lands
+    in the Nextflow task work directory, so it is cleaned up with the run.
+    max_mem of 0 leaves DuckDB's own auto-detection in place.
     """
     try:
         duckdb.execute(f"SET threads TO {nslots}")
     except Exception as exc:
         print(f"setting DuckDB threads to {nslots} failed: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    if max_mem:
+        mem_limit = max(1, int(max_mem * 0.8))
+        try:
+            duckdb.execute(f"SET memory_limit TO '{mem_limit}GB'")
+            duckdb.execute("SET temp_directory TO 'duckdb_tmp'")
+        except Exception as exc:
+            print(f"setting DuckDB memory limit to {mem_limit}GB failed: {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
 
 ###############################################################################
 # 3. Define the main function
@@ -205,28 +224,40 @@ def configure_duckdb(nslots: int) -> None:
 def main() -> None:
     args = parse_args()
 
+    clust_tsv = args.clust_tsv
+    min_orf_len = args.min_orf_len
+    clust_thres = args.clust_thres
+    readscov_files = args.readscov_files
+    meancov_files = args.meancov_files
+    tax_annot_files = args.tax_annot_files
+    fun_annot_files = args.fun_annot_files
+    nslots = args.nslots
+    max_mem = args.max_mem
+    output_dir = args.output_dir
+    overwrite = args.overwrite
+
     ###########################################################################
     # 3.1. Check mandatory files
     ###########################################################################
 
-    check_file(args.clust_tsv, "cluster TSV")
-    for f in args.meancov_files:
+    check_file(clust_tsv, "cluster TSV")
+    for f in meancov_files:
         check_file(f, "mean coverage file")
-    for f in args.readscov_files:
+    for f in readscov_files:
         check_file(f, "reads coverage file")
 
     ###########################################################################
     # 3.2. Check output directory
     ###########################################################################
 
-    if os.path.isdir(args.output_dir):
-        if not args.overwrite:
-            print(f"{args.output_dir} already exists; use --overwrite to overwrite")
+    if os.path.isdir(output_dir):
+        if not overwrite:
+            print(f"{output_dir} already exists; use --overwrite to overwrite")
             sys.exit(0)
         try:
-            shutil.rmtree(args.output_dir)
+            shutil.rmtree(output_dir)
         except Exception:
-            print(f"rm -r output directory {args.output_dir} failed", file=sys.stderr)
+            print(f"rm -r output directory {output_dir} failed", file=sys.stderr)
             sys.exit(1)
 
     ###########################################################################
@@ -234,50 +265,50 @@ def main() -> None:
     ###########################################################################
 
     try:
-        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
     except Exception:
-        print(f"mkdir {args.output_dir} failed", file=sys.stderr)
+        print(f"mkdir {output_dir} failed", file=sys.stderr)
         sys.exit(1)
 
     ###########################################################################
     # 3.4. Concatenate coverage files
     ###########################################################################
 
-    meancov_concat = os.path.join(args.output_dir, "orfs_meancov.tsv.gz")
-    readscov_concat = os.path.join(args.output_dir, "orfs_readscov.tsv.gz")
+    meancov_concat = os.path.join(output_dir, "orfs_meancov.tsv.gz")
+    readscov_concat = os.path.join(output_dir, "orfs_readscov.tsv.gz")
 
-    concat_tables(args.meancov_files, meancov_concat)
-    concat_tables(args.readscov_files, readscov_concat)
+    concat_tables(meancov_files, meancov_concat)
+    concat_tables(readscov_files, readscov_concat)
 
     ###########################################################################
     # 3.5. Concatenate annot files
     ###########################################################################
     
-    if args.tax_annot_files:
-        tax_annot_concat = os.path.join(args.output_dir, "contigs_tax_annot.tsv.gz")
-        concat_tables(args.tax_annot_files, tax_annot_concat)
+    if tax_annot_files:
+        tax_annot_concat = os.path.join(output_dir, "contigs_tax_annot.tsv.gz")
+        concat_tables(tax_annot_files, tax_annot_concat)
 
-    if args.fun_annot_files:
-        fun_annot_concat = os.path.join(args.output_dir, f"orfs-minlen{args.min_orf_len}aa-fun_annot.tsv.gz")
-        concat_tables(args.fun_annot_files, fun_annot_concat)
+    if fun_annot_files:
+        fun_annot_concat = os.path.join(output_dir, f"orfs-minlen{min_orf_len}aa-fun_annot.tsv.gz")
+        concat_tables(fun_annot_files, fun_annot_concat)
 
     ###########################################################################
     # 3.6. Configure DuckDB thread usage
     ###########################################################################
 
-    configure_duckdb(args.nslots)
+    configure_duckdb(nslots, max_mem)
 
     ###########################################################################
     # 3.7. Build unified OPU-ORF coverage table
     ###########################################################################
 
-    clust_thres_str = str(args.clust_thres * 100).rstrip("0").rstrip(".")
+    clust_thres_str = str(clust_thres * 100).rstrip("0").rstrip(".")
     output1_tsv = os.path.join(
-        args.output_dir,
-        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-coverage.tsv.gz",
+        output_dir,
+        f"orfs_clust-minlen{min_orf_len}aa-id{clust_thres_str}perc-coverage.tsv.gz",
     )
 
-    build_unified_table(args.clust_tsv, meancov_concat, 
+    build_unified_table(clust_tsv, meancov_concat, 
                         readscov_concat, output1_tsv)
 
     ###########################################################################
@@ -285,8 +316,8 @@ def main() -> None:
     ###########################################################################
 
     output2_tsv = os.path.join(
-        args.output_dir,
-        f"orfs_clust-minlen{args.min_orf_len}aa-id{clust_thres_str}perc-collapsed_coverage.tsv.gz",
+        output_dir,
+        f"orfs_clust-minlen{min_orf_len}aa-id{clust_thres_str}perc-collapsed_coverage.tsv.gz",
     )
 
     build_collapsed_table(output1_tsv, output2_tsv)

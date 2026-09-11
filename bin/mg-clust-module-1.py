@@ -62,6 +62,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nslots", dest="nslots", type=int, default=4,
         help="number of threads used (default: 4)")
 
+    parser.add_argument("--max_mem", dest="max_mem", type=int, default=0,
+        help="memory budget for this task in GiB, passed on to MEGAHIT as -m")
+
     parser.add_argument("--min_contig_length", dest="min_contig_length", type=int, default=250,
         help="minimum length of contigs (smaller than this will be discarded; default: 250)")
 
@@ -131,6 +134,7 @@ def main() -> None:
     precomputed_bam = args.precomputed_bam
     markdup = args.markdup
     nslots = args.nslots
+    max_mem = args.max_mem
     assem_preset = args.assem_preset
     min_contig_length = args.min_contig_length
     min_seq = args.min_seq
@@ -214,6 +218,12 @@ def main() -> None:
             run(
                 [
                     megahit,
+                    # MEGAHIT's default -m 0.9 means 90% of the machine's total RAM as
+                    # read from /proc/meminfo -- it is not cgroup-aware, so under a
+                    # SLURM allocation it sizes its SdBG for the whole node and is
+                    # killed. Values > 1 are read as raw bytes; the 0.85 leaves room
+                    # for the Python parent and MEGAHIT's non-SdBG allocations.
+                    *(["-m", str(int(max_mem * 0.85 * 1024 ** 3))] if max_mem else []),
                     "--num-cpu-threads",
                     str(nslots),
                     "-1",
