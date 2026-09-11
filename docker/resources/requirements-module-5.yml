@@ -4,4 +4,4 @@ channels:
   - conda-forge
 dependencies:
   - python>=3.13
-  - pyhmmer>=0.10
+  - pyhmmer>=0.11
