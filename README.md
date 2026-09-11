@@ -30,6 +30,8 @@ MG-Clust/
 │   ├── mg-clust-module-4.py           # Taxonomic annotation via MMseqs2 + GTDB
 │   ├── mg-clust-module-5.py           # Functional annotation via pyHMMER + KO profiles
 │   ├── mg-clust-module-6.py           # Build unified OPU-ORF coverage table
+│   ├── download_imgs.py               # Pre-fetch container images into the local cache
+│   ├── download_dbs.py                # Pre-fetch the GTDB and KEGG KO databases
 │   └── utils.py                       # Shared utility functions
 ├── docker/
 │   ├── Dockerfile.module-1            # Docker image for module 1
@@ -67,14 +69,34 @@ MG-Clust/
 
 ## Requirements
 
+Running locally (the default, `-profile standard`):
+
 - [Nextflow](https://www.nextflow.io) >= 23.x
 - [Docker](https://www.docker.com)
 
-All tool dependencies are packaged in Docker images hosted on GitHub Container Registry. No local tool installation is required beyond Nextflow and Docker.
+Running on a SLURM cluster (`-profile slurm`):
 
-## Docker images
+- [Nextflow](https://www.nextflow.io) **>= 23.09**
+- [Apptainer](https://apptainer.org) (the `slurm` profile uses Nextflow's `apptainer`
+  config scope; Singularity works too if its `singularity` compatibility symlink is present)
 
-Docker images are pulled automatically from GitHub Container Registry when the pipeline runs. To rebuild images locally from the repo root:
+The higher Nextflow floor on the cluster is not cosmetic. Nextflow places the pipeline's
+`bin/` directory on the container `PATH` as an **absolute host path**, so the module
+scripts only resolve if that path is bind-mounted inside the container. That mount comes
+from `apptainer.autoMounts`, which defaults to `true` only from Nextflow 23.09 onward —
+on 23.01–23.08 it defaults to `false`, and tasks fail with
+`mg-clust-module-N.py: command not found` whenever the repo or the work directory sits
+outside Apptainer's default bind list (anything not under `$HOME`, such as a checkout on
+`/project` or a work directory on `/scratch`). The `slurm` profile relies on that default
+rather than setting it, so check `nextflow -version` on the cluster; if it is older, either
+upgrade or add `apptainer.autoMounts = true` to the profile in `nextflow.config`.
+
+All tool dependencies are packaged in container images hosted on GitHub Container Registry. No local tool installation is required beyond Nextflow and a container runtime.
+
+## Container images
+
+Images are pulled from GitHub Container Registry automatically when the pipeline runs, so
+a local Docker run needs no setup. To rebuild them from the repo root:
 
 ```bash
 bash docker/dockerbuild_commands.sh
@@ -88,16 +110,83 @@ docker build --network=host -f docker/Dockerfile.module-N -t ghcr.io/pereiramemo
 
 > **Note:** Build commands must be run from the **repo root** because Dockerfiles reference paths under `docker/resources/` relative to the build context.
 
-### External databases
+### Pre-fetching images — `bin/download_imgs.py`
 
-Modules 4 and 5 require large reference databases that are **not** bundled in the Docker images. They are downloaded automatically on first use and cached at the paths below (configurable via `nextflow.config`):
+On a cluster, letting the pipeline pull its own images is a poor idea: every per-sample
+task races for the same download on a cold cache, and many sites block outbound HTTPS from
+compute nodes entirely. Run this once on the submit/login node first:
 
-| Module | Database | Default path |
+```bash
+bin/download_imgs.py                  # Apptainer (default), into ~/.mg-clust/apptainer
+bin/download_imgs.py --engine docker  # warm the local Docker daemon instead
+bin/download_imgs.py --engine both
+```
+
+| Option | Default | Purpose |
 |---|---|---|
-| 4 | GTDB (MMseqs2 taxonomy) | `~/.mg-clust/db/gtdb/gtdb` |
-| 5 | KEGG KO HMM profiles | `~/.mg-clust/db/ko/ko_profiles.hmm` |
+| `--engine` | `apptainer` | `apptainer` \| `docker` \| `both` |
+| `--cache_dir` | `~/.mg-clust/apptainer` | Where Apptainer images are written |
+| `--tmp_dir` | `~/.mg-clust/tmp` | Scratch for unpacking layers |
+| `--force` | off | Re-pull images that are already cached |
 
-The database directories are bind-mounted into the containers at runtime so the download is persistent across runs.
+Three things worth knowing:
+
+- **`--cache_dir` must match `apptainer.cacheDir` in `nextflow.config`.** Nextflow finds a
+  cached image by *filename*, derived from the image tag, so images pre-pulled anywhere
+  else — or under any other name — are invisible to it and get pulled a second time. The
+  script reproduces that naming rule exactly; if you change the config, pass the same path
+  here. Setting `NXF_APPTAINER_CACHEDIR` does **not** help: Nextflow consults the config
+  value first and only falls back to that variable when it is unset.
+- **`--tmp_dir` exists because `/tmp` is usually too small.** Apptainer unpacks each
+  layer's full root filesystem to scratch before assembling the image, needing several GB
+  per image; a small or `tmpfs`-backed `/tmp` gives
+  `no space left on device` mid-unpack. The default keeps that scratch beside the cache,
+  and removes it afterwards even if the run is interrupted.
+- **Already-cached images are skipped**, which is what makes the script cheap to re-run —
+  an Apptainer pull otherwise refuses to overwrite an existing file and aborts. The
+  trade-off is that a **rebuilt `:latest` is not picked up until you pass `--force`**.
+  (Apptainer's own content cache is not the problem here: it re-checks the registry
+  digest on every pull. It is the script's filename check that cannot see a new build.)
+
+### External databases — `bin/download_dbs.py`
+
+Modules 4 and 5 need large reference databases that are **not** bundled in the images:
+
+| Module | Database | Default path | Size |
+|---|---|---|---|
+| 4 | GTDB (MMseqs2 taxonomy) | `~/.mg-clust/db/gtdb/gtdb` | ~1.1 GB |
+| 5 | KEGG KO profiles + `ko_list` | `~/.mg-clust/db/ko/ko_profiles.hmm` | ~7.6 GB |
+
+The pipeline will fetch them on first use, but for the same reasons as the images — a
+concurrency race into shared scratch paths, and compute nodes without internet — fetch
+them once up front instead:
+
+```bash
+bin/download_dbs.py --container       # recommended: KO natively, GTDB in the module-4 image
+bin/download_dbs.py --databases ko    # KO only; pure stdlib, needs nothing installed
+bin/download_dbs.py                   # all native; requires mmseqs on PATH
+```
+
+| Option | Default | Purpose |
+|---|---|---|
+| `--databases` | `both` | `gtdb` \| `ko` \| `both` |
+| `--container` | off | Run the GTDB fetch inside the cached module-4 image |
+| `--gtdb` / `--ko_db` / `--ko_list` | see table above | Override cache locations |
+| `--nslots` | `4` | Threads for `mmseqs databases` |
+| `--force` | off | Re-download databases that are already cached |
+
+**Why `--container`:** the GTDB fetch shells out to `mmseqs`, which only exists inside the
+module-4 image, so a bare login node cannot run it. With this flag the KO half runs
+natively and the script then re-executes its GTDB half inside the cached image, binding
+the checkout and the database directory. It requires `bin/download_imgs.py` to have run
+first, and fails with a message saying so if the image is missing.
+
+Both scripts are **idempotent**: re-running with a warm cache is a near-instant no-op
+rather than a repeat download, and neither needs `mmseqs` or any other tool on `PATH` once
+the caches are populated.
+
+The database directories are bind-mounted into the containers at run time (via
+`containerOptions` in `nextflow.config`), so one cache is shared by every run.
 
 ---
 
@@ -171,12 +260,7 @@ General:
 Threading: modules 1, 2, 4 and 5 run one task per sample, each using
 --nslots threads; --maxForks caps each module separately, not the
 pipeline as a whole. Modules 3 and 6 run a single task over all samples,
-taking --maxForks x --nslots threads (3 x 16 = 48).
-Modules 3, 4 and 5 are independent branches of the DAG and can run at the
-same time, so requested threads may exceed --maxForks x --nslots several
-times over; only module 6 waits on everything and runs alone. The local
-executor queues tasks to stay within the machine's cores, while a cluster
-executor submits each task as its own job.
+taking --nslots_collected threads (24).
 
 Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
   --input_mode          STR  from_reads | from_assembly | from_bam | from_orfs (default: from_reads)
@@ -639,7 +723,13 @@ BAM as soon as it is sorted.
 | KEGG KO profiles (`ko_profiles.hmm`) | ~7.6 GB | module 5 |
 
 Roughly 9 GB in total. Build scratch (the ~1.5 GB `profiles.tar.gz` download and its
-extracted `profiles/` tree) is removed even if the build fails.
+extracted `profiles/` tree) is removed even if the build fails. Populate it up front with
+`bin/download_dbs.py --container` rather than letting the first run fetch it.
+
+**Image cache** (`~/.mg-clust/apptainer/`, only under `-profile slurm`): roughly 2 GB for
+the six module images, plus Apptainer's own content cache under `~/.apptainer/cache`.
+Populate it with `bin/download_imgs.py`. Unpacking scratch goes to `~/.mg-clust/tmp` and is
+cleaned up afterwards, including when a pull is interrupted.
 
 ---
 
