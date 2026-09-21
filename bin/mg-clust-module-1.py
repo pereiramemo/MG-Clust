@@ -16,7 +16,8 @@ where dependencies are available on PATH.
 - Removes intermediate files after completion
 
 Alternatively, --precomputed_assembly can be given to skip MEGAHIT and reuse an
-already-assembled sample:
+already-assembled sample (plain or gzipped; a gzipped assembly is decompressed
+while it is staged):
 - combined with --precomputed_bam (no reads), read mapping is skipped too --
   the given BAM is reheadered (via samtools reheader) so its @SQ contig names
   stay in agreement with the prefixed assembly.
@@ -29,6 +30,7 @@ already-assembled sample:
 ###############################################################################
 
 import argparse
+import gzip
 import sys, os
 import subprocess
 import shutil
@@ -85,9 +87,10 @@ def parse_args() -> argparse.Namespace:
              "the assembly comes from MEGAHIT or from --precomputed_assembly")
 
     parser.add_argument("--precomputed_assembly", dest="precomputed_assembly", default=None,
-        help="path to a precomputed assembly fasta; skips MEGAHIT assembly. Combine "
-             "with --precomputed_bam to also skip BWA-MEM mapping, or with "
-             "--reads1/--reads2 to still map those reads against this assembly (default: None)")
+        help="path to a precomputed assembly fasta, plain or gzipped; skips MEGAHIT "
+             "assembly. Combine with --precomputed_bam to also skip BWA-MEM mapping, or "
+             "with --reads1/--reads2 to still map those reads against this assembly "
+             "(default: None)")
 
     parser.add_argument("--precomputed_bam", dest="precomputed_bam", default=None,
         help="path to a precomputed, coordinate-sorted bam of reads mapped to "
@@ -104,6 +107,15 @@ def parse_args() -> argparse.Namespace:
         help="run Picard MarkDuplicates to remove duplicates (default: False)")
     
     return parser.parse_args()
+
+###############################################################################
+# 2.2 Detect gzip compression by magic bytes
+###############################################################################
+
+def is_gzipped(path: str) -> bool:
+    """True if path starts with the gzip magic number, whatever it is named."""
+    with open(path, "rb") as fh:
+        return fh.read(2) == b"\x1f\x8b"
 
 """
 Dev only section 
@@ -207,9 +219,13 @@ def main() -> None:
     assembly_file = os.path.join(assembly_output_dir, f"{sample_name}.contigs.fa")
 
     if precomputed_assembly:
+        # A precomputed assembly may arrive gzipped; decompress it while staging so
+        # every step below (contig count, header rewrite, bwa index) sees plain fasta.
         try:
             os.makedirs(assembly_output_dir, exist_ok=True)
-            shutil.copyfile(precomputed_assembly, assembly_file)
+            opener = gzip.open if is_gzipped(precomputed_assembly) else open
+            with opener(precomputed_assembly, "rb") as f_in, open(assembly_file, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
         except Exception as e:
             print(f"Failed to stage precomputed assembly into {assembly_file}: {e}", file=sys.stderr)
             sys.exit(1)
