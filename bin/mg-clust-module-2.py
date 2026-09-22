@@ -16,8 +16,13 @@ where dependencies are available on PATH.
 
 Alternatively, --precomputed_orfs_faa + --precomputed_orfs_bed can be given
 together to skip FragGeneScanRs and the .out-to-BED conversion entirely, staging
-the given files in place of those steps' outputs; --assembly_file is then unused
-(coverage estimation only needs --bam_file and the ORF BED file either way).
+the given files (plain or gzipped; gzipped input is decompressed while it is
+staged) in place of those steps' outputs; --assembly_file is then unused
+(coverage estimation only needs --bam_file and the ORF BED file either way). In
+that case the BED's contig IDs are checked against the BAM header before bedtools
+runs, since nothing else ties the two files together -- a mismatch there means the
+ORFs were predicted from a different assembly, or from one prefixed with a
+different module 1 --id_sep.
 """
 
 ###############################################################################
@@ -30,7 +35,7 @@ import shutil
 import sys, os
 import subprocess
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import run, check_tools, check_file, gzip_file
+from utils import run, check_tools, check_file, gzip_file, stage_decompressed
 
 # os, subprocess, and sys are imported in utils.py, so they are available here as well
 
@@ -62,11 +67,12 @@ def parse_args() -> argparse.Namespace:
         help="bam input file (reads mapped to contigs)")
 
     parser.add_argument("--precomputed_orfs_faa", dest="precomputed_orfs_faa", default=None,
-        help="path to a precomputed ORF protein FASTA; skips FragGeneScanRs. Must "
-             "be combined with --precomputed_orfs_bed (default: None)")
+        help="path to a precomputed ORF protein FASTA, plain or gzipped; skips "
+             "FragGeneScanRs. Must be combined with --precomputed_orfs_bed (default: None)")
 
     parser.add_argument("--precomputed_orfs_bed", dest="precomputed_orfs_bed", default=None,
-        help="path to a precomputed ORF BED file (contig_id, start(0-based), end, "
+        help="path to a precomputed ORF BED file, plain or gzipped "
+             "(contig_id, start(0-based), end, "
              "strand, orf_id) matching --precomputed_orfs_faa; skips the "
              ".out-to-BED conversion step. Must be combined with "
              "--precomputed_orfs_faa (default: None)")
@@ -177,12 +183,12 @@ def main() -> None:
         # 3.4. Stage precomputed ORFs (skip FragGeneScanRs + BED conversion)
         ###########################################################################
 
-        try:
-            shutil.copyfile(precomputed_orfs_faa, faa_file)
-            shutil.copyfile(precomputed_orfs_bed, bed_file)
-        except Exception as exc:
-            print(f"Staging precomputed ORF files failed: {exc}", file=sys.stderr)
-            sys.exit(1)
+        # Decompressed on the way in: these may arrive gzipped (a prior run's
+        # module 2 output is *_orfs.faa.gz / *_orfs.bed.gz), and every step below
+        # -- the BED/BAM check, bedtools, and gzip_file() at the end -- expects the
+        # same plain files the freshly-predicted path produces.
+        stage_decompressed(precomputed_orfs_faa, faa_file, "--precomputed_orfs_faa")
+        stage_decompressed(precomputed_orfs_bed, bed_file, "--precomputed_orfs_bed")
 
     else:
 
@@ -276,7 +282,38 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.7. Sort BED file according to genome file order
+    # 3.7. Verify precomputed ORFs match this BAM
+    ###########################################################################
+
+    # bedtools sort -g and coverage -sorted both require every BED contig to be
+    # present in the genome file. When the ORFs are predicted here that holds by
+    # construction -- the BED is derived from the same assembly the BAM was built
+    # against. Precomputed ORFs come from a separate file with nothing tying it
+    # to this BAM, so check it up front: bedtools otherwise fails obscurely, or
+    # (for a partial overlap) silently reports no coverage for the missing
+    # contigs, which surfaces only as thin OPU tables in module 6.
+    if have_precomputed_orfs:
+        try:
+            with open(bed_file, "r", encoding="utf-8") as fh_in:
+                bed_chroms = {line.split("\t")[0] for line in fh_in if line.strip()}
+            with open(genome_file, "r", encoding="utf-8") as fh_in:
+                bam_chroms = {line.split("\t")[0] for line in fh_in if line.strip()}
+        except Exception as exc:
+            print(f"Comparing precomputed ORF contig IDs with the BAM header failed: {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        missing = bed_chroms - bam_chroms
+        if missing:
+            print(f"{len(missing)} of {len(bed_chroms)} contig IDs in "
+                  f"--precomputed_orfs_bed are absent from the BAM header, e.g. "
+                  f"{sorted(missing)[:3]}; the precomputed ORFs were not generated "
+                  f"from this assembly/BAM. If they came from an earlier run, check "
+                  f"that --id_sep matches the separator used then.", file=sys.stderr)
+            sys.exit(1)
+
+    ###########################################################################
+    # 3.8. Sort BED file according to genome file order
     ###########################################################################
 
     # bedtools coverage -sorted requires -a and -b to follow the same chromosome
@@ -290,7 +327,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.8. Get number of reads per ORF
+    # 3.9. Get number of reads per ORF
     ###########################################################################
 
     # Run bedtools coverage -counts to get read counts per ORF
@@ -311,7 +348,7 @@ def main() -> None:
         sys.exit(1)
 
     ###########################################################################
-    # 3.9. Get mean coverage per ORF
+    # 3.10. Get mean coverage per ORF
     ###########################################################################
 
     # Run bedtools coverage -mean to get mean depth per ORF
@@ -333,14 +370,14 @@ def main() -> None:
             os.remove(dead_path)
 
     ###########################################################################
-    # 3.10. Add sample names to mean coverage and read counts tables
+    # 3.11. Add sample names to mean coverage and read counts tables
     ###########################################################################
 
     add_sample(bedtool_reads, sample_name)
     add_sample(bedtools_mean, sample_name)
 
     ###########################################################################
-    # 3.11. Compress the published outputs
+    # 3.12. Compress the published outputs
     ###########################################################################
 
     # Done only now, after every bedtools stage has finished with the plain files.
@@ -351,7 +388,7 @@ def main() -> None:
         gzip_file(out_file)
 
     ###########################################################################
-    # 3.12. Write output log and exit
+    # 3.13. Write output log and exit
     ###########################################################################
 
     print(f"{os.path.basename(__file__)} exited successfully")

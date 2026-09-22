@@ -234,7 +234,9 @@ sample_name    assembly                            bam                          
 sample1        data/assemblies/sample1.contigs.fa  data/bams/sample1_sorted.bam   data/orfs/sample1_orfs.faa  data/orfs/sample1_orfs.bed
 ```
 
-> The BAM supplied via `from_bam`/`from_orfs` must already be coordinate-sorted and contain only reads mapped to the paired `assembly` file — module 1 validates the sort order and rewrites `@SQ` contig names to match the sample-prefixed assembly, but does not re-run mapping, filtering, or deduplication. For `from_orfs`, `orfs_faa`/`orfs_bed` must have been generated from that same sample-prefixed assembly (e.g. from a prior pipeline run's module 2 output) — contig/ORF IDs are trusted as-is, not re-validated against the assembly.
+> The BAM supplied via `from_bam`/`from_orfs` must already be coordinate-sorted and contain only reads mapped to the paired `assembly` file — module 1 validates the sort order and rewrites `@SQ` contig names to match the sample-prefixed assembly, but does not re-run mapping, filtering, or deduplication. For `from_orfs`, `orfs_faa`/`orfs_bed` must have been generated from that same sample-prefixed assembly (e.g. from a prior pipeline run's module 2 output); module 2 checks the BED's contig IDs against the BAM header and aborts if they disagree.
+>
+> For every precomputed mode, `--id_sep` must match the separator already present in the supplied files. Module 1's prefixing is idempotent, but only against the separator it was given: run `|`-prefixed inputs with `--id_sep .` and the guard misses, producing `<sample>.<sample>|<contig>`. Under `from_bam`/`from_assembly` that is silent and internally consistent — ORFs are predicted from the re-prefixed assembly, so the run completes correctly with ugly IDs. Under `from_orfs` it desynchronises the BAM from the untouched BED, which is exactly what the module 2 check above catches.
 
 Working example TSVs for all four modes ship in `test/data/` (`from_reads.tsv`, `from_assembly.tsv`, `from_bam.tsv`, `from_orfs.tsv`).
 
@@ -270,6 +272,7 @@ Input mode (selects which TSV samplesheet MODULE1/MODULE2 read):
   --from_orfs_tsv        TSV  [from_orfs]      sample_name, assembly, bam, orfs_faa, orfs_bed    (default: null)
 
 MODULE1 — Assembly:
+  --id_sep          STR   Separator in <sample><sep><contig> IDs (default: |)
   --assem_preset    STR   MEGAHIT preset (default: meta-sensitive)
   --min_contig_len  INT   Minimum contig length in bp (default: 250)
   --min_seq         INT   Minimum reads required to assemble (default: 5)
@@ -359,6 +362,7 @@ mg-clust-module-1.py \
     --reads2            <R2.fastq> \
     --sample_name       <sample> \
     --output_dir        <output_dir> \
+    --id_sep            '|' \
     --nslots            4 \
     --assem_preset      meta-sensitive \
     --min_contig_length 250 \
@@ -393,6 +397,7 @@ mg-clust-module-1.py \
 | `--precomputed_assembly` | `None` | Path to a precomputed assembly FASTA; skips MEGAHIT. Combine with `--precomputed_bam` to also skip BWA-MEM mapping, or with `--reads1`/`--reads2` to still map those reads against it |
 | `--precomputed_bam` | `None` | Path to a precomputed, coordinate-sorted BAM of reads mapped to `--precomputed_assembly`; skips BWA-MEM mapping entirely. Requires `--precomputed_assembly`; cannot be combined with `--reads1`/`--reads2` or `--markdup` |
 | `--sample_name` | — | Sample name used to prefix output files (required) |
+| `--id_sep` | `\|` | Separator between the sample name and the original contig name in contig/ORF IDs, i.e. `<sample><id_sep><contig>`. Rejected if it contains whitespace or `>`, which would corrupt the FASTA/BED/SAM formats; anything else is allowed |
 | `--output_dir` | — | Output directory (required) |
 | `--assem_preset` | `meta-sensitive` | MEGAHIT preset (`meta-sensitive`, `meta-large`, etc.); ignored when `--precomputed_assembly` is given |
 | `--min_contig_length` | `250` | Discard contigs shorter than this (bp); ignored when `--precomputed_assembly` is given |
@@ -402,7 +407,7 @@ mg-clust-module-1.py \
 | `--overwrite` | `false` | Overwrite output directory if it exists |
 
 **Outputs:**
-- `<sample_name>/assembly/<sample_name>.contigs.fa` — assembled (or staged) contigs, with sample-name-prefixed headers
+- `<sample_name>/assembly/<sample_name>.contigs.fa` — assembled (or staged) contigs, with headers rewritten to `<sample_name><id_sep><contig>`
 - `<sample_name>/<sample_name>_sorted.bam` — coordinate-sorted BAM of reads mapped to contigs (freshly mapped, or reheadered from `--precomputed_bam`)
 
 ---

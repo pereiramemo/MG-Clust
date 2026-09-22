@@ -82,3 +82,33 @@ def gzip_file(path: str, level: int = 6) -> str:
         print(f"compressing {path} failed: {exc}", file=sys.stderr)
         sys.exit(1)
     return gz_path
+
+###############################################################################
+# 2.5 Detect gzip compression by magic bytes
+###############################################################################
+
+def is_gzipped(path: str) -> bool:
+    """True if path starts with the gzip magic number, whatever it is named."""
+    with open(path, "rb") as fh:
+        return fh.read(2) == b"\x1f\x8b"
+
+###############################################################################
+# 2.6 Stage an input file, decompressing it if it arrived gzipped
+###############################################################################
+
+def stage_decompressed(src: str, dst: str, label: str) -> None:
+    """Copy src to dst, transparently gunzipping if src is gzipped.
+
+    Modules stage precomputed inputs under their own output names (a supplied
+    *_orfs.faa.gz becomes <sample>_orfs.faa). A plain byte copy would leave gzip
+    bytes in a file named .faa, which then gets compressed a second time by
+    gzip_file() into a double-gzipped output. Decompressing here keeps every
+    intermediate plain, exactly as the freshly-computed path produces them.
+    """
+    try:
+        opener = gzip.open if is_gzipped(src) else open
+        with opener(src, "rb") as f_in, open(dst, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    except Exception as exc:
+        print(f"Failed to stage {label} into {dst}: {exc}", file=sys.stderr)
+        sys.exit(1)

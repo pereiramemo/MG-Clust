@@ -45,6 +45,7 @@ workflow {
           --from_orfs_tsv        TSV  [from_orfs]      sample_name, assembly, bam, orfs_faa, orfs_bed    (default: ${params.from_orfs_tsv})
 
         MODULE1 — Assembly:
+          --id_sep          STR   Separator in <sample><sep><contig> IDs (default: ${params.id_sep})
           --assem_preset    STR   MEGAHIT preset (default: ${params.assem_preset})
           --min_contig_len  INT   Minimum contig length in bp (default: ${params.min_contig_len})
           --min_seq         INT   Minimum reads required to assemble (default: ${params.min_seq})

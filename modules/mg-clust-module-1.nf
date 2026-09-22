@@ -27,6 +27,7 @@ process MODULE1 {
         --reads1             ${reads1} \
         --reads2             ${reads2} \
         --sample_name        ${sample_name} \
+        --id_sep             '${params.id_sep}' \
         --output_dir         ${task.process.toLowerCase().replaceFirst('module', 'module-')}/${sample_name} \
         --nslots             ${task.cpus} \
         --max_mem            ${task.memory.toGiga()} \
@@ -70,6 +71,7 @@ process MODULE1_PRECOMPUTED {
         --precomputed_assembly  ${assembly} \
         --precomputed_bam       ${bam} \
         --sample_name           ${sample_name} \
+        --id_sep                '${params.id_sep}' \
         --output_dir            module-1/${sample_name} \
         --nslots                ${task.cpus} \
         --max_mem               ${task.memory.toGiga()} \
@@ -112,6 +114,7 @@ process MODULE1_ASSEMBLY_ONLY {
         --reads1                ${reads1} \
         --reads2                ${reads2} \
         --sample_name           ${sample_name} \
+        --id_sep                '${params.id_sep}' \
         --output_dir            module-1/${sample_name} \
         --nslots                ${task.cpus} \
         --max_mem               ${task.memory.toGiga()} \

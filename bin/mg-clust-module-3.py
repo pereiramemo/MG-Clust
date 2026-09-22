@@ -6,7 +6,7 @@ Assumes execution inside the conda environment "mg-clust-module-3" (or equivalen
 where dependencies are available on PATH.
 
 - Concatenates ORF protein sequences from all samples (raw byte copy; headers already
-  carry the `<sample_name>|` prefix applied by module 1 to the contig names)
+  carry the `<sample_name><id_sep>` prefix applied by module 1 to the contig names)
 - Filters ORFs by minimum length using bbduk
 - Creates an MMseqs2 sequence database from the filtered ORFs
 - Clusters filtered ORFs using MMseqs2 at a given sequence identity threshold

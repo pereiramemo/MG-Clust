@@ -8,8 +8,12 @@ where dependencies are available on PATH.
 
 - Assembles paired-end reads with MEGAHIT
 - Aborts early if the assembly has fewer than --min_seq contigs
-- Prepends the sample name to contig headers so contig (and downstream ORF)
-  IDs stay unique across samples
+- Prepends "<sample_name><id_sep>" to contig headers so contig (and downstream
+  ORF) IDs stay unique across samples. --id_sep defaults to "|"; this module is
+  the pipeline's only writer of that separator, and every module after it treats
+  the composed ID as an opaque string. Prefixing is idempotent, so re-running a
+  precomputed assembly/BAM through it does not double-prefix -- provided the
+  same --id_sep is used as when those inputs were produced.
 - Maps reads back to the assembly with BWA-MEM
 - Converts, filters, sorts, and indexes alignments with samtools
 - Optionally marks and removes duplicates with Picard MarkDuplicates
@@ -35,14 +39,21 @@ import sys, os
 import subprocess
 import shutil
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import run, check_tools, check_file
+from utils import run, check_tools, check_file, is_gzipped
 
 megahit = "megahit"
 bwa = "bwa"
 samtools = "samtools"
 picard = "picard"  # use picard wrapper instead of java -jar
 
-###############################################################################
+# Characters --id_sep may not contain. These corrupt the formats the ID travels
+# through, rather than merely being unusual choices: whitespace truncates every
+# contig name at bwa index time (and in every whitespace-keyed tool downstream),
+# a tab or newline also breaks the tab-delimited BED and coverage tables, and
+# ">" breaks the FASTA header. Anything else is the user's call.
+BAD_SEP_CHARS = set(" \t\n\r>")
+
+################## #############################################################
 # 2. Define utility functions
 ###############################################################################
 
@@ -100,6 +111,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample_name", dest="sample_name", required=True,
         help="sample name used to name the files")
 
+    parser.add_argument("--id_sep", dest="id_sep", default="|",
+        help="separator between the sample name and the original contig name in "
+             "contig/ORF IDs, e.g. '|' gives <sample>|<contig> (default: '|')")
+
     parser.add_argument("--min_seq", dest="min_seq", type=int, default=5,
         help="minimum number of assembled sequences to continue (default: 5)")
 
@@ -107,15 +122,6 @@ def parse_args() -> argparse.Namespace:
         help="run Picard MarkDuplicates to remove duplicates (default: False)")
     
     return parser.parse_args()
-
-###############################################################################
-# 2.2 Detect gzip compression by magic bytes
-###############################################################################
-
-def is_gzipped(path: str) -> bool:
-    """True if path starts with the gzip magic number, whatever it is named."""
-    with open(path, "rb") as fh:
-        return fh.read(2) == b"\x1f\x8b"
 
 """
 Dev only section 
@@ -153,6 +159,13 @@ def main() -> None:
     overwrite = args.overwrite
     output_dir = args.output_dir
     sample_name = args.sample_name
+    id_sep = args.id_sep
+
+    if not id_sep or BAD_SEP_CHARS & set(id_sep):
+        print(f"--id_sep {id_sep!r} is empty or contains whitespace or '>', which "
+              f"would corrupt FASTA headers, the BED/TSV tables or the BAM @SQ SN: "
+              f"field", file=sys.stderr)
+        sys.exit(1)
     
     have_assembly = bool(precomputed_assembly)
     have_bam = bool(precomputed_bam)
@@ -305,8 +318,8 @@ def main() -> None:
             for line in in_fh:
                 if line.startswith(">"):
                     header = line[1:].rstrip("\n")
-                    if not header.startswith(f"{sample_name}|"):
-                        header = f"{sample_name}|{header}"
+                    if not header.startswith(f"{sample_name}{id_sep}"):
+                        header = f"{sample_name}{id_sep}{header}"
                     out_fh.write(f">{header}\n")
                 else:
                     out_fh.write(line)
@@ -339,7 +352,7 @@ def main() -> None:
             sys.exit(1)
 
         # Rewrite @SQ SN: fields with the same idempotent sample-name prefix
-        # rule as 3.6; @HD/@PG/etc. and @SQ order/count/LN are left untouched.
+        # rule as 3.7; @HD/@PG/etc. and @SQ order/count/LN are left untouched.
         # This is safe because BAM alignment records reference @SQ entries by
         # positional index, not by name.
         new_header_lines = []
@@ -351,8 +364,8 @@ def main() -> None:
             for i, f in enumerate(fields):
                 if f.startswith("SN:"):
                     sn = f[len("SN:"):]
-                    if not sn.startswith(f"{sample_name}|"):
-                        sn = f"{sample_name}|{sn}"
+                    if not sn.startswith(f"{sample_name}{id_sep}"):
+                        sn = f"{sample_name}{id_sep}{sn}"
                     fields[i] = f"SN:{sn}"
             new_header_lines.append("\t".join(fields))
 
