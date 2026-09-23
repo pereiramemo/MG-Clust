@@ -148,11 +148,6 @@ workflow {
 
         module1_out = MODULE1_PRECOMPUTED(module1_in_ch)
 
-        precomputed_orfs_ch = channel.fromPath(params.from_orfs_tsv, checkIfExists: true)
-            .splitCsv(header: true, sep: '\t')
-            .map { row -> tuple(row.sample_name,
-                                 file(row.orfs_faa, checkIfExists: true),
-                                 file(row.orfs_bed, checkIfExists: true)) }
     } else {
         error "Unknown --input_mode '${params.input_mode}'; expected one of: from_reads, from_assembly, from_bam, from_orfs"
     }
@@ -162,10 +157,18 @@ workflow {
     // those precomputed files plus fresh coverage estimation only
     if (stop >= 2) {
         if (params.input_mode == "from_orfs") {
+
+            precomputed_orfs_ch = channel.fromPath(params.from_orfs_tsv, checkIfExists: true)
+              .splitCsv(header: true, sep: '\t')
+              .map { row -> tuple(row.sample_name,
+                                 file(row.orfs_faa, checkIfExists: true),
+                                 file(row.orfs_bed, checkIfExists: true)) }
+
             module2_in_ch = module1_out
                 .map { sample_name, _assembly, bam -> tuple(sample_name, bam) }
                 .join(precomputed_orfs_ch, by: 0) // -> tuple(sample_name, bam, orfs_faa, orfs_bed)
             module2_out = MODULE2_PRECOMPUTED(module2_in_ch)
+            
         } else {
             module2_out = MODULE2(module1_out)
         }
