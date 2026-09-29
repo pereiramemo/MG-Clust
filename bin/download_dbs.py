@@ -3,7 +3,8 @@
 """
 mg-clust database pre-fetch: populate ~/.mg-clust/db before a pipeline run.
 
-Modules 4 and 5 need GTDB (~1.1 GB) and the KEGG KO profiles + ko_list (~7.6 GB).
+Modules 4 and 5 need GTDB (~120 GB download) and the KEGG KO profiles + ko_list
+(~7.6 GB). The GTDB files are downloaded with wget, which must be on the host PATH.
 Fetching them from inside the pipeline means every per-sample task races for the
 same download into the same fixed scratch paths, and many clusters block outbound
 HTTPS from compute nodes entirely. Run this once on the submit/login node before
@@ -32,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -41,6 +43,21 @@ from download_imgs import APPTAINER_CACHE_DIR, IMAGE_TEMPLATE, cache_filename
 
 # Define output paths and URLs
 GTDB_DEFAULT = os.path.join(os.path.expanduser("~"), ".mg-clust", "db", "gtdb", "gtdb")
+GTDB_URL = "https://data.ace.uq.edu.au/public/gtdb/data/releases/latest"
+
+# Files that mmseqs' GTDB recipe downloads into its tmp folder. The keys are the
+# local names mmseqs expects to find there; the values are paths under GTDB_URL.
+GTDB_FILES = {
+    "version": "VERSION.txt",
+    "gtdb.tar.gz": "genomic_files_reps/gtdb_proteins_aa_reps.tar.gz",
+    "bac120_taxonomy.tsv": "bac120_taxonomy.tsv",
+    "ar53_taxonomy.tsv": "ar53_taxonomy.tsv",
+}
+
+# wget gives up on a DNS failure instead of retrying, so it is retried here.
+WGET_MAX_ATTEMPTS = 50
+WGET_RETRY_WAIT = 60  # seconds
+WGET_NETWORK_FAILURE = 4  # wget's exit code for network errors, DNS timeouts included
 
 KO_DEFAULT = os.path.join(os.path.expanduser("~"), ".mg-clust", "db", "ko", "ko_profiles.hmm")
 KO_PROFILES_URL = "https://www.genome.jp/ftp/db/kofam/profiles.tar.gz"
@@ -198,30 +215,83 @@ def ensure_ko_database(ko_db: str, ko_list: str, force: bool = False) -> None:
     print("KO profiles + ko_list ready.")
 
 ###############################################################################
-# 2.5 Fetch/cache the GTDB MMseqs2 taxonomy database
+# 2.5 Download the GTDB files with wget (resumable)
 ###############################################################################
 
-def fetch_gtdb_database(gtdb: str, nslots: int, force: bool = False) -> None:
+def wget_with_retries(url: str, path: str) -> None:
+    """Download url to path, resuming a partial file and retrying network errors.
 
-    # A valid mmseqs2 database always has a companion .dbtype file; that is the
-    # presence test module 4 uses.
-    if os.path.isfile(gtdb + ".dbtype") and not force:
-        print(f"GTDB database already cached at {gtdb}; skipping")
+    --continue makes every attempt pick up where the previous one stopped, so a
+    network outage costs a retry instead of the whole download.
+    """
+    for attempt in range(1, WGET_MAX_ATTEMPTS + 1):
+        cmd = ["wget", "--continue", "--timeout=60", "--output-document", path, url]
+        exit_code = subprocess.run(cmd).returncode
+
+        if exit_code == 0:
+            return
+
+        if exit_code != WGET_NETWORK_FAILURE:
+            print(f"wget failed on {url} (exit code {exit_code})", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"network error on {url} (attempt {attempt}/{WGET_MAX_ATTEMPTS}); "
+              f"retrying in {WGET_RETRY_WAIT} s", file=sys.stderr)
+        time.sleep(WGET_RETRY_WAIT)
+
+    print(f"giving up on {url} after {WGET_MAX_ATTEMPTS} attempts; "
+          "re-run to resume", file=sys.stderr)
+    sys.exit(1)
+
+
+def download_gtdb_files(files_dir: str) -> None:
+    """Download the GTDB files into files_dir, then mark it with download.done.
+
+    download.done is the marker mmseqs' GTDB recipe checks: when present, mmseqs
+    skips its own download and only builds the database.
+    """
+    done_marker = os.path.join(files_dir, "download.done")
+    if os.path.isfile(done_marker):
+        print(f"GTDB files already downloaded in {files_dir}")
         return
 
-    # Only needed to actually download. Checked after the presence test so that a
-    # warm cache does not require mmseqs at all -- it lives in the module-4 image,
-    # and the common case is re-running this on a login node that has neither.
+    check_tools(["wget"])
+    os.makedirs(files_dir, exist_ok=True)
+
+    for local_name, remote_name in GTDB_FILES.items():
+        url = f"{GTDB_URL}/{remote_name}"
+        path = os.path.join(files_dir, local_name)
+        print(f"Downloading {url}")
+        wget_with_retries(url, path)
+
+    open(done_marker, "w").close()
+
+###############################################################################
+# 2.6 Build the GTDB MMseqs2 taxonomy database from the downloaded files
+###############################################################################
+
+def build_gtdb_database(gtdb: str, download_dir: str, nslots: int) -> None:
+
+    # Needed only here, so a warm cache does not require mmseqs at all -- it lives
+    # in the module-4 image, and the common case is a login node that has neither.
     check_tools([mmseqs])
 
-    gtdb_dir = os.path.dirname(gtdb)
-    try:
-        os.makedirs(gtdb_dir, exist_ok=True)
-    except Exception:
-        print(f"mkdir {gtdb_dir} failed", file=sys.stderr)
-        sys.exit(1)
+    # Remove any previous database first: mmseqs skips the taxonomy step when
+    # <gtdb>_mapping already exists, and keeps an existing <gtdb>.version.
+    # The isfile check leaves the gtdb_download_tmp folder alone.
+    old_files = glob.glob(gtdb) + glob.glob(gtdb + ".*") + glob.glob(gtdb + "_*")
+    for path in old_files:
+        if os.path.isfile(path):
+            os.remove(path)
 
-    download_tmp = os.path.join(gtdb_dir, "gtdb_download_tmp")
+    # With --force-reuse 1, mmseqs uses the folder that <download_dir>/latest points
+    # to as its tmp folder, instead of a new one named after a parameter hash.
+    # That folder already holds the files and download.done.
+    latest = os.path.join(download_dir, "latest")
+    if os.path.islink(latest):
+        os.remove(latest)
+    os.symlink("files", latest)
+
     try:
         run(
             [
@@ -229,23 +299,58 @@ def fetch_gtdb_database(gtdb: str, nslots: int, force: bool = False) -> None:
             "databases",
             "GTDB",
             gtdb,
-            download_tmp,
+            download_dir,
+            "--force-reuse", "1",
             "--threads", str(nslots)
             ]
         )
     except subprocess.CalledProcessError:
-        print("mmseqs databases GTDB download failed", file=sys.stderr)
+        # The downloaded files are kept on purpose, so a re-run only rebuilds.
+        print(f"mmseqs databases GTDB build failed; downloaded files kept in "
+              f"{download_dir}, re-run to retry the build", file=sys.stderr)
         sys.exit(1)
-    finally:
-        # Several GB of scratch. Drop it whether or not the download succeeded,
-        # so an interrupted run does not strand it in the shared cache.
-        if os.path.isdir(download_tmp):
-            shutil.rmtree(download_tmp, ignore_errors=True)
 
-    print("GTDB database download complete.")
+    shutil.rmtree(download_dir)
+    print("GTDB database build complete.")
 
 ###############################################################################
-# 2.6 Re-run the GTDB fetch inside the module-4 image (--container)
+# 2.7 Fetch/cache the GTDB MMseqs2 taxonomy database
+###############################################################################
+
+def fetch_gtdb_database(gtdb: str, nslots: int, force: bool, container: bool) -> None:
+    """Download the GTDB files, then build the MMseqs2 database from them.
+
+    Without --container, everything runs in this process, and mmseqs must be on PATH.
+
+    With --container, this function runs twice:
+      1. On the host: downloads the files with wget, then exec_gtdb_in_container
+         replaces this process, so build_gtdb_database is never reached here.
+      2. Inside the module-4 image, where the script is re-run without --container:
+         download_gtdb_files finds download.done and skips the download (the image
+         has no wget), and build_gtdb_database runs with the image's mmseqs.
+    """
+
+    # A valid mmseqs2 database always has a companion .dbtype file; that is the
+    # presence test module 4 uses.
+    if os.path.isfile(gtdb + ".dbtype") and not force:
+        print(f"GTDB database already cached at {gtdb}; skipping")
+        return
+
+    # Kept on failure, unlike other scratch: it holds a ~120 GB download that a
+    # re-run resumes. It is removed only once the database is built.
+    download_dir = os.path.join(os.path.dirname(gtdb), "gtdb_download_tmp")
+
+    # Always on the host: the module-4 image has no wget. Under --container the
+    # child finds download.done and skips this step.
+    download_gtdb_files(os.path.join(download_dir, "files"))
+
+    if container:
+        exec_gtdb_in_container(gtdb, nslots, force)  # never returns
+
+    build_gtdb_database(gtdb, download_dir, nslots)
+
+###############################################################################
+# 2.8 Re-run the GTDB fetch inside the module-4 image (--container)
 ###############################################################################
 
 def exec_gtdb_in_container(gtdb: str, nslots: int, force: bool) -> None:
@@ -329,9 +434,7 @@ def main() -> None:
     if want_gtdb:
         # Last, because exec_gtdb_in_container never returns: the KO half above
         # must already be done by the time we hand off.
-        if container:
-            exec_gtdb_in_container(gtdb, nslots, force)
-        fetch_gtdb_database(gtdb, nslots, force)
+        fetch_gtdb_database(gtdb, nslots, force, container)
 
     ###########################################################################
     # 3.2. Check files
